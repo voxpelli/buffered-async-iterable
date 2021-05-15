@@ -1,7 +1,6 @@
 // @ts-check
 /// <reference types="node" />
 
-// FIXME: Ensure there are no memory leaks
 // FIXME: Check this https://twitter.com/matteocollina/status/1392056117128306691
 // TODO: Make a proper merge for async iterables by accepting multiple input iterables, see: https://twitter.com/matteocollina/status/1392056092482576385
 
@@ -32,7 +31,6 @@ const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
     const next = asyncIterator.next()
       // eslint-disable-next-line promise/prefer-await-to-then
       .then(async result => ({
-        // FIXME: Ensure this doesn't leak memory like crazy. Preferably use WeakRef here when possible
         bufferPromise: next,
         ...(
           result.done
