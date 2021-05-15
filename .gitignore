@@ -13,3 +13,5 @@
 *.d.ts
 
 # Library specific ones
+*.heapsnapshot
+*.0x

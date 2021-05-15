@@ -2,7 +2,8 @@
 /// <reference types="node" />
 
 // FIXME: Ensure there are no memory leaks
-
+// FIXME: Check this https://twitter.com/matteocollina/status/1392056117128306691
+// TODO: Make a proper merge for async iterables by accepting multiple input iterables, see: https://twitter.com/matteocollina/status/1392056092482576385
 
 /**
  * @template T
@@ -26,7 +27,7 @@ const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
   const asyncIterator = asyncIterable[Symbol.asyncIterator]();
 
   const queueNext = () => {
-    console.log('😳 queueNext', Date.now());
+    // console.log('😳 queueNext', Date.now());
     /** @type {NextLookup} */
     const next = asyncIterator.next()
       // eslint-disable-next-line promise/prefer-await-to-then
@@ -50,13 +51,13 @@ const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
 
   /** @type {AsyncIterator<R>["next"]} */
   const nextValue = async () => {
-    console.log('🤔 nextValue', Date.now());
+    // console.log('🤔 nextValue', Date.now());
     if (bufferedPromises.size === 0) {
       return { done: true, value: undefined };
     }
 
     const { bufferPromise, ...result } = await Promise.race(bufferedPromises);
-    console.log('🏎 race has been won!', result, 'at time', Date.now());
+    // console.log('🏎 race has been won!', result, 'at time', Date.now());
 
     bufferedPromises.delete(bufferPromise);
 
