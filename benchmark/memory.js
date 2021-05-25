@@ -7,9 +7,6 @@
 
 const { writeFile } = require('fs').promises;
 const v8 = require('v8');
-// @ts-ignore
-// eslint-disable-next-line node/no-missing-require
-const { setTimeout } = require('timers/promises');
 const memwatch = require('@airbnb/node-memwatch');
 
 const {
@@ -28,6 +25,12 @@ const EXPECTED_MAX_HEAP_BYTES_DIFF = 150 * 1000;
 if (DEBUG_LOGGING) {
   memwatch.on('stats', () => { console.log('GC ran'); });
 }
+
+/**
+ * @param {number} timeout
+ * @returns {Promise<void>}
+ */
+const asyncTimeout = (timeout) => new Promise(resolve => { setTimeout(resolve, timeout); });
 
 const asyncIterable = (async function * () {
   for (let i = 0; i < ITERATIONS; i++) {
@@ -55,11 +58,13 @@ Promise.resolve().then(async () => {
     rawResult.push(value);
   }
 
-  console.log(`Memory test complete! Iterated over ${rawResult.length} items. Five first items:`, rawResult.slice(0, 5), 'Checking result...');
+  console.log(`Iterated over ${rawResult.length} items:`, rawResult.slice(0, 5).join(', ') + '...');
+  console.log('...memory test complete!');
+  console.log('Checking memory usage result...');
 })
   .then(async () => {
     global.gc();
-    await setTimeout(1000);
+    await asyncTimeout(1000);
 
     EXPORT_HEAP_DUMPS && await writeFile(`${SCRIPT_START}-end.heapsnapshot`, v8.getHeapSnapshot());
 
