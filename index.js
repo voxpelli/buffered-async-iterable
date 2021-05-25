@@ -10,7 +10,7 @@
  * @param {AsyncIterable<T>} asyncIterable
  * @param {(item: T) => Promise<R>} callback
  * @param {number} [size]
- * @returns {AsyncIterable<R>}
+ * @returns {AsyncIterableIterator<R>}
  */
 const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
   if (!asyncIterable) throw new TypeError('Expected asyncIterable to be provided');
@@ -72,18 +72,16 @@ const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
   /** @type {Promise<IteratorResult<R>>} */
   let currentStep;
 
-  /** @type {AsyncIterator<R>} */
-  const resultAsyncIterator = {
+  /** @type {AsyncIterableIterator<R>} */
+  const resultAsyncIterableIterator = {
     async next () {
       // eslint-disable-next-line promise/prefer-await-to-then
       currentStep = currentStep ? currentStep.then(() => nextValue()) : nextValue();
       return currentStep;
-    }
+    [Symbol.asyncIterator]: () => resultAsyncIterableIterator
   };
 
-  return {
-    [Symbol.asyncIterator]: () => resultAsyncIterator
-  };
+  return resultAsyncIterableIterator;
 };
 
 module.exports = {
