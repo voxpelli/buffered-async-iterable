@@ -1,10 +1,21 @@
 // @ts-check
 /// <reference types="node" />
 
+// FIXME: Add tests for return()
+
 // FIXME: Check this https://twitter.com/matteocollina/status/1392056117128306691
 // FIXME: Read up on https://tc39.es/ecma262/#table-async-iterator-optional and add return() and throw(). return() is called by a "for await" when eg. a "break" or a "throw" happens within it
 // TODO: Have option to persist order? To not use Promise.race()?
 // TODO: Make a proper merge for async iterables by accepting multiple input iterables, see: https://twitter.com/matteocollina/status/1392056092482576385
+
+const createCompletionTracker = () => {
+  let isDone = false;
+
+  return {
+    hasCompleted: () => isDone,
+    markAsCompleted: () => { isDone = true; },
+  };
+};
 
 /**
  * @template T
@@ -25,8 +36,19 @@ const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
   /** @type {Set<NextLookup>} */
   const bufferedPromises = new Set();
 
+  const completionTracker = createCompletionTracker();
+
   // TODO: Check if it's already an async iterator?
   const asyncIterator = asyncIterable[Symbol.asyncIterator]();
+
+  /** @returns {Promise<IteratorReturnResult<undefined>>} */
+  const markAsEnded = async () => {
+    if (completionTracker.hasCompleted() === false) {
+      completionTracker.markAsCompleted();
+      bufferedPromises.clear();
+    }
+    return { done: true, value: undefined };
+  };
 
   const queueNext = () => {
     // console.log('😳 queueNext', Date.now());
@@ -65,10 +87,16 @@ const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
 
     bufferedPromises.delete(bufferPromise);
 
+    if (completionTracker.hasCompleted()) {
+      return { done: true, value: undefined };
+    }
+
     if (result.done) {
       if (bufferedPromises.size !== 0) return nextValue();
-      return { done: true, value: undefined };
-    } else if (bufferedPromises.size !== 0) {
+      return markAsEnded();
+    }
+
+    if (bufferedPromises.size !== 0) {
       queueNext();
     }
 
@@ -84,6 +112,9 @@ const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
       // eslint-disable-next-line promise/prefer-await-to-then
       currentStep = currentStep ? currentStep.then(() => nextValue()) : nextValue();
       return currentStep;
+    },
+    // TODO: Accept an argument, as in the spec
+    'return': () => markAsEnded(),
     [Symbol.asyncIterator]: () => resultAsyncIterableIterator
   };
 
