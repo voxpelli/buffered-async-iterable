@@ -1,8 +1,6 @@
 // @ts-check
 /// <reference types="node" />
 
-// FIXME: Add tests for return()
-
 // FIXME: Check this https://twitter.com/matteocollina/status/1392056117128306691
 // FIXME: Read up on https://tc39.es/ecma262/#table-async-iterator-optional and add return() and throw(). return() is called by a "for await" when eg. a "break" or a "throw" happens within it
 // TODO: Have option to persist order? To not use Promise.race()?
@@ -24,7 +22,7 @@ const createCompletionTracker = () => {
  * @param {AsyncIterable<T>} asyncIterable
  * @param {(item: T) => Promise<R>} callback
  * @param {number} [size]
- * @returns {AsyncIterableIterator<R>}
+ * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]> }}
  */
 const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
   if (!asyncIterable) throw new TypeError('Expected asyncIterable to be provided');
@@ -84,7 +82,6 @@ const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
 
     // FIXME: Handle rejected promises!
     const { bufferPromise, ...result } = await Promise.race(bufferedPromises);
-    // console.log('🏎 race has been won!', result, 'at time', Date.now());
 
     bufferedPromises.delete(bufferPromise);
 
@@ -107,7 +104,7 @@ const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
   /** @type {Promise<IteratorResult<R>>} */
   let currentStep;
 
-  /** @type {AsyncIterableIterator<R>} */
+  /** @type {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]> }} */
   const resultAsyncIterableIterator = {
     async next () {
       // eslint-disable-next-line promise/prefer-await-to-then
@@ -116,7 +113,8 @@ const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
     },
     // TODO: Accept an argument, as in the spec
     'return': () => markAsEnded(),
-    [Symbol.asyncIterator]: () => resultAsyncIterableIterator
+
+    [Symbol.asyncIterator]: () => resultAsyncIterableIterator,
   };
 
   return resultAsyncIterableIterator;

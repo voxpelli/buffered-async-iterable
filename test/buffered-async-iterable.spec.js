@@ -325,5 +325,45 @@ describe('bufferAsyncIterable()', () => {
         duration.should.equal(306600 + 20000 - 200);
       });
     });
+
+    describe('AsyncInterface return()', () => {
+      it('should end the iterator when called', async () => {
+        const iterator = bufferAsyncIterable(baseAsyncIterable, async (item) => item);
+
+        iterator.next().should.eventually.deep.equal({ value: 0 });
+        iterator.return().should.eventually.deep.equal({ done: true, value: undefined });
+        iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
+      });
+
+      it('should be called when a loop breaks', async () => {
+        const iterator = bufferAsyncIterable(baseAsyncIterable, async (item) => item);
+
+        // eslint-disable-next-line no-unreachable-loop
+        for await (const value of iterator) {
+          value.should.equal(0);
+          break;
+        }
+
+        iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
+      });
+
+      it('should be called when a loop throws', async () => {
+        const iterator = bufferAsyncIterable(baseAsyncIterable, async (item) => item);
+        const errorToThrow = new Error('Yet another error');
+
+        try {
+          // eslint-disable-next-line no-unreachable-loop
+          for await (const value of iterator) {
+            value.should.equal(0);
+            throw errorToThrow;
+          }
+        } catch (err) {
+          err.should.equal(errorToThrow);
+          iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
+        }
+      });
+    });
+
+    it('should return the value sent to it');
   });
 });
