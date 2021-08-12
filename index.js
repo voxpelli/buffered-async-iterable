@@ -7,6 +7,7 @@
 // FIXME: Read up on https://tc39.es/ecma262/#table-async-iterator-optional and add return() and throw(). return() is called by a "for await" when eg. a "break" or a "throw" happens within it
 // TODO: Have option to persist order? To not use Promise.race()?
 // TODO: Make a proper merge for async iterables by accepting multiple input iterables, see: https://twitter.com/matteocollina/status/1392056092482576385
+// TODO: Look into adding setImmediate() and such to help with event loop lag
 
 const createCompletionTracker = () => {
   let isDone = false;
