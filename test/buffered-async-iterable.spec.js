@@ -299,14 +299,11 @@ describe('bufferAsyncIterable()', () => {
 
           for await (const value of bufferAsyncIterable(baseAsyncIterable, async (item) => {
             const delay = item % 3 === 0 ? 100000 : 100;
-            console.log('🚣‍♂️ map method', item, 'delay', delay);
             await promisableTimeout(delay);
             return item;
           })) {
-            console.log('🎹 got value', value);
             rawResult.push(value);
             if (value % 5 === 0) {
-              console.log('😱😱😱😱😱😱');
               await promisableTimeout(20000);
             }
           }
