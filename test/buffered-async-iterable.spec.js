@@ -133,7 +133,7 @@ describe('bufferAsyncIterable()', () => {
       }
     });
 
-    describe('test utility: yieldValuesOverTime()', () => {
+    describe('test the test utility: yieldValuesOverTime()', () => {
       it('should return all values when looped over ', async () => {
         // Create the promise first, then have it be fully executed using clock.runAllAsync()
         const promisedResult = (async () => {
