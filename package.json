@@ -33,7 +33,6 @@
     "flame": "run-s flame:*",
     "prepublishOnly": "run-s build",
     "sync-gh-actions": "ghat",
-    "test:memory": "node --expose-gc test/memory.js",
     "test:mocha": "c8 --reporter=lcov --reporter text mocha 'test/**/*.spec.js'",
     "test-ci": "run-s test:*",
     "test": "run-s check test:*"
