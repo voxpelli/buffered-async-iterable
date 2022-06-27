@@ -338,29 +338,43 @@ describe('bufferAsyncIterable()', () => {
       it('should be called when a loop breaks', async () => {
         const iterator = bufferAsyncIterable(baseAsyncIterable, async (item) => item);
 
-        // eslint-disable-next-line no-unreachable-loop
-        for await (const value of iterator) {
-          value.should.equal(0);
-          break;
-        }
+        const promisedResult = (async () => {
+          // eslint-disable-next-line no-unreachable-loop
+          for await (const value of iterator) {
+            value.should.equal(0);
+            break;
+          }
 
-        iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
+          return Date.now();
+        })();
+
+        await clock.runAllAsync();
+
+        const duration = await promisedResult;
+
+        // TODO: Do we need an await here?
+        await iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
+        duration.should.equal(2200);
       });
 
       it('should be called when a loop throws', async () => {
         const iterator = bufferAsyncIterable(baseAsyncIterable, async (item) => item);
         const errorToThrow = new Error('Yet another error');
 
-        try {
+        const promisedResult = (async () => {
           // eslint-disable-next-line no-unreachable-loop
           for await (const value of iterator) {
             value.should.equal(0);
             throw errorToThrow;
           }
-        } catch (err) {
-          err.should.equal(errorToThrow);
-          iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
-        }
+
+          return Date.now();
+        })();
+
+        await clock.runAllAsync();
+
+        await promisedResult.should.eventually.be.rejectedWith(errorToThrow);
+        await iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
       });
     });
 

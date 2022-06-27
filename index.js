@@ -1,6 +1,7 @@
 // @ts-check
 /// <reference types="node" />
 
+// TODO: Get inspired by Matteos https://github.com/mcollina/hwp/blob/main/index.js, eg AbortController is nice?
 // FIXME: Check this https://twitter.com/matteocollina/status/1392056117128306691
 // FIXME: Read up on https://tc39.es/ecma262/#table-async-iterator-optional and add return() and throw(). return() is called by a "for await" when eg. a "break" or a "throw" happens within it
 // TODO: Have option to persist order? To not use Promise.race()?
@@ -45,6 +46,10 @@ const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
     if (completionTracker.hasCompleted() === false) {
       completionTracker.markAsCompleted();
       bufferedPromises.clear();
+
+      if (asyncIterator.return) {
+        await asyncIterator.return();
+      }
     }
     return { done: true, value: undefined };
   };
@@ -77,14 +82,19 @@ const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
   const nextValue = async () => {
     // console.log('🤔 nextValue', Date.now());
     if (bufferedPromises.size === 0) {
+      return markAsEnded();
+    }
+
+    if (completionTracker.hasCompleted()) {
       return { done: true, value: undefined };
     }
 
-    // FIXME: Handle rejected promises!
+    // FIXME: Handle rejected promises! We need to remove it from bufferedPromises
     const { bufferPromise, ...result } = await Promise.race(bufferedPromises);
 
     bufferedPromises.delete(bufferPromise);
 
+    // We are mandated by the spec to always return this if the iterator is done
     if (completionTracker.hasCompleted()) {
       return { done: true, value: undefined };
     }
