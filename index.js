@@ -138,18 +138,19 @@ export function map (input, callback, options) {
       return queuedPromises.size === 0
         ? markAsEnded()
         : nextValue();
-    }
-
-    if (isAsyncIterable(result.value)) {
+    } else if (isAsyncIterable(result.value)) {
+      if (fromSubIterator) {
+        // TODO: Fix types
+        return { value: result.value };
+      }
       // FIXME: Handle possible error here?
       subIterators.add(result.value[Symbol.asyncIterator]());
+      fillQueue();
+      return nextValue();
+    } else {
+      fillQueue();
+      return { value: result.value };
     }
-
-    fillQueue();
-
-    return isAsyncIterable(result.value)
-      ? nextValue()
-      : { value: result.value };
   };
 
   /** @type {Promise<IteratorResult<R>>} */
