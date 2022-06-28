@@ -1,14 +1,11 @@
 /* eslint-disable unicorn/no-process-exit */
 /* eslint-disable promise/always-return */
 /* eslint-disable no-console */
-/// <reference types="node" />
 
-'use strict';
-
-const {
+import {
   ITERATIONS_REFERENCE,
   bufferedLoop,
-} = require('./utils/loop');
+} from './utils/loop.js';
 
 Promise.resolve().then(async () => {
   await bufferedLoop(ITERATIONS_REFERENCE, async (i) => i * 2);

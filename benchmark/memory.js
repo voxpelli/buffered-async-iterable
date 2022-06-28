@@ -1,17 +1,12 @@
 /* eslint-disable unicorn/no-process-exit */
 /* eslint-disable promise/always-return */
 /* eslint-disable no-console */
-/// <reference types="node" />
 
-'use strict';
+import { writeFile } from 'node:fs/promises';
+import { getHeapSnapshot } from 'v8';
+import memwatch from '@airbnb/node-memwatch';
 
-const { writeFile } = require('fs').promises;
-const v8 = require('v8');
-const memwatch = require('@airbnb/node-memwatch');
-
-const {
-  bufferAsyncIterable,
-} = require('..');
+import { map } from '../index.js';
 
 /** @type {boolean} */
 const EXPORT_HEAP_DUMPS = false;
@@ -45,9 +40,10 @@ Promise.resolve().then(async () => {
   // Take first snapshot
   heapDiff = new memwatch.HeapDiff();
 
-  EXPORT_HEAP_DUMPS && await writeFile(`${SCRIPT_START}-start.heapsnapshot`, v8.getHeapSnapshot());
+  // @ts-ignore
+  EXPORT_HEAP_DUMPS && await writeFile(`${SCRIPT_START}-start.heapsnapshot`, getHeapSnapshot());
 
-  const baseAsyncIterable = bufferAsyncIterable(
+  const baseAsyncIterable = map(
     asyncIterable,
     async (i) => i * 2
   );
@@ -66,7 +62,8 @@ Promise.resolve().then(async () => {
     global.gc();
     await asyncTimeout(1000);
 
-    EXPORT_HEAP_DUMPS && await writeFile(`${SCRIPT_START}-end.heapsnapshot`, v8.getHeapSnapshot());
+    // @ts-ignore
+    EXPORT_HEAP_DUMPS && await writeFile(`${SCRIPT_START}-end.heapsnapshot`, getHeapSnapshot());
 
     // Take the second snapshot and compute the diff
     const diff = heapDiff.end();

@@ -1,18 +1,15 @@
 /* eslint-disable unicorn/no-process-exit */
 /* eslint-disable promise/always-return */
 /* eslint-disable no-console */
-/// <reference types="node" />
 
-'use strict';
-
-const {
+import {
   promisedImmediate,
   bufferedLoop,
   bufferedLoopWithRealAsyncPayload,
   logLoopResult,
   bufferedLoopWithLog,
   bufferedLoopWithRealAsyncPayloadAndLog,
-} = require('./utils/loop');
+} from './utils/loop.js';
 
 const ITERATIONS = 1000 * 1000;
 

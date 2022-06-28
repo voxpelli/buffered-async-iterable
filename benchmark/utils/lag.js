@@ -1,5 +1,3 @@
-'use strict';
-
 let lastELUTime = Date.now();
 /** @type {number|undefined} */
 let maxLag;
@@ -17,12 +15,10 @@ const logEventLoopLag = () => {
 const interval = setInterval(logEventLoopLag, LOG_INTERVAL);
 interval.unref();
 
-const getAndResetMaxLag = () => {
+export const getAndResetMaxLag = () => {
   const result = maxLag;
 
   maxLag = 0;
 
   return result;
 };
-
-module.exports = { getAndResetMaxLag };

@@ -1,15 +1,12 @@
 /* eslint-disable unicorn/no-process-exit */
 /* eslint-disable promise/always-return */
 /* eslint-disable no-console */
-/// <reference types="node" />
 
-'use strict';
-
-const {
+import {
   ITERATIONS_REFERENCE,
   promisedImmediate,
   bufferedLoopWithRealAsyncPayload,
-} = require('./utils/loop');
+} from './utils/loop.js';
 
 Promise.resolve().then(async () => {
   await bufferedLoopWithRealAsyncPayload(ITERATIONS_REFERENCE, async (i) => i % 10 === 0 ? promisedImmediate(i * 2) : i * 2);

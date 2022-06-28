@@ -1,11 +1,11 @@
 {
-  "name": "buffered-async-iterable",
+  "name": "async-iterable-prefetch",
   "version": "0.0.0",
-  "description": "Creates a buffered async iterable",
-  "homepage": "http://github.com/voxpelli/buffered-async-iterable",
+  "description": "Creates a prefetched async iterable",
+  "homepage": "http://github.com/voxpelli/async-iterable-prefetch",
   "repository": {
     "type": "git",
-    "url": "git://github.com/voxpelli/buffered-async-iterable.git"
+    "url": "git://github.com/voxpelli/async-iterable-prefetch.git"
   },
   "type": "module",
   "exports": "./index.js",
@@ -40,9 +40,9 @@
   },
   "keywords": [],
   "author": "Pelle Wessman <pelle@kodfabrik.se> (http://kodfabrik.se/)",
-  "license": "0BSD",
+  "license": "MIT",
   "engines": {
-    "node": ">=12.0.0"
+    "node": "^14.18.0 || >=16.0.0"
   },
   "devDependencies": {
     "@airbnb/node-memwatch": "^2.0.0",
@@ -50,7 +50,7 @@
     "@types/chai": "^4.2.21",
     "@types/chai-as-promised": "^7.1.4",
     "@types/mocha": "^9.0.0",
-    "@types/node": "^12.20.19",
+    "@types/node": "^14.18.21",
     "@types/sinon": "^10.0.2",
     "@types/sinon-chai": "^3.2.5",
     "@voxpelli/eslint-config": "11.0.1",

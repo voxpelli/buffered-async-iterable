@@ -1,9 +1,3 @@
-/// <reference types="node" />
-/// <reference types="mocha" />
-/// <reference types="chai" />
-
-'use strict';
-
 import chai from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import sinon from 'sinon';
