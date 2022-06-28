@@ -39,7 +39,7 @@ async function * makeIterableAsync (input) {
  * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]> }}
  */
 export function map (input, callback, options) {
-  /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { queuePromise: QueuePromise, fromSubIterator?: true }>} QueuePromise */
+  /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { queuePromise: QueuePromise, fromSubIterator?: boolean, isSubIterator?: boolean }>} QueuePromise */
 
   const {
     queueSize = 3,
@@ -94,20 +94,28 @@ export function map (input, callback, options) {
           if (result.done) {
             subIterators.delete(subIterator);
           }
-          return { queuePromise, fromSubIterator: true, ...result };
+          return {
+            queuePromise,
+            fromSubIterator: true,
+            ...result
+          };
         })
       : asyncIterator.next()
         // eslint-disable-next-line promise/prefer-await-to-then
-        .then(async result => ({
-          queuePromise,
-          ...(
-            result.done
-              ? result
-              // FIXME: Handle rejected promises from callback! And properly mark this iterator as completed + the upstream one
-              // eslint-disable-next-line promise/no-callback-in-promise
-              : { value: await callback(result.value) }
-          )
-        }));
+        .then(async result => {
+          if (result.done) {
+            return { queuePromise, ...result };
+          }
+
+          // eslint-disable-next-line promise/no-callback-in-promise
+          const callbackResult = callback(result.value);
+
+          return {
+            queuePromise,
+            isSubIterator: isAsyncIterable(callbackResult),
+            value: await callbackResult,
+          };
+        });
 
     queuedPromises.add(queuePromise);
 
@@ -123,7 +131,12 @@ export function map (input, callback, options) {
 
     // FIXME: Handle rejected promises! We need to remove it from bufferedPromises
     // Wait for some of the current promises to be finished
-    const { fromSubIterator, queuePromise, ...result } = await Promise.race(queuedPromises);
+    const {
+      fromSubIterator,
+      isSubIterator,
+      queuePromise,
+      ...result
+    } = await Promise.race(queuedPromises);
 
     queuedPromises.delete(queuePromise);
 
@@ -138,17 +151,16 @@ export function map (input, callback, options) {
       return queuedPromises.size === 0
         ? markAsEnded()
         : nextValue();
-    } else if (isAsyncIterable(result.value)) {
-      if (fromSubIterator) {
-        // TODO: Fix types
-        return { value: result.value };
-      }
+    } else if (isSubIterator && isAsyncIterable(result.value)) {
       // FIXME: Handle possible error here?
       subIterators.add(result.value[Symbol.asyncIterator]());
       fillQueue();
       return nextValue();
     } else {
       fillQueue();
+
+      // TODO: Fix the types
+      // @ts-ignore
       return { value: result.value };
     }
   };

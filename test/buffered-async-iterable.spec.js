@@ -349,13 +349,38 @@ describe('bufferAsyncIterable()', () => {
       duration.should.equal(14700);
     });
 
-    it('should leave async generator values alone unless explicitly told to use', async () => {
+    it('should leave nested async generators unless told to care', async () => {
       // Create the promise first, then have it be fully executed using clock.runAllAsync()
       const promisedResult = (async () => {
         const rawResult = [];
 
         for await (const value of bufferAsyncIterable(baseAsyncIterable, async function * (item) {
           yield yieldValuesOverTimeWithPrefix(2, (i) => i % 2 === 1 ? 2000 : 100, 'prefix-' + item + '-');
+        })) {
+          rawResult.push(value);
+        }
+
+        /** @type {[AsyncIterable<string>[], number]} */
+        const result = [rawResult, Date.now()];
+
+        return result;
+      })();
+
+      await clock.runAllAsync();
+
+      const [result, duration] = await promisedResult;
+
+      result.should.be.an('array').of.length(6).which.containAll(item => item.should.be.an('AsyncGenerator'));
+      duration.should.equal(6300);
+    });
+
+    it('should leave async generator return values alone', async () => {
+      // Create the promise first, then have it be fully executed using clock.runAllAsync()
+      const promisedResult = (async () => {
+        const rawResult = [];
+
+        for await (const value of bufferAsyncIterable(baseAsyncIterable, async function (item) {
+          return yieldValuesOverTimeWithPrefix(2, (i) => i % 2 === 1 ? 2000 : 100, 'prefix-' + item + '-');
         })) {
           rawResult.push(value);
         }
