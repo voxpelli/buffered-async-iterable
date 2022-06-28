@@ -1,5 +1,4 @@
-// @ts-check
-/// <reference types="node" />
+/* eslint-disable func-style */
 
 // TODO: Get inspired by Matteos https://github.com/mcollina/hwp/blob/main/index.js, eg AbortController is nice?
 // FIXME: Check this https://twitter.com/matteocollina/status/1392056117128306691
@@ -8,44 +7,40 @@
 // TODO: Make a proper merge for async iterables by accepting multiple input iterables, see: https://twitter.com/matteocollina/status/1392056092482576385
 // TODO: Look into adding setImmediate() and such to help with event loop lag
 
-const createCompletionTracker = () => {
-  let isDone = false;
-
-  return {
-    hasCompleted: () => isDone,
-    markAsCompleted: () => { isDone = true; },
-  };
-};
-
 /**
  * @template T
  * @template R
  * @param {AsyncIterable<T>} asyncIterable
  * @param {(item: T) => Promise<R>} callback
- * @param {number} [size]
+ * @param {{ queueSize?: number|undefined }} [options]
  * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]> }}
  */
-const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
+export function map (asyncIterable, callback, options) {
+  const {
+    queueSize = 3,
+  } = options || {};
+
   if (!asyncIterable) throw new TypeError('Expected asyncIterable to be provided');
   if (typeof asyncIterable[Symbol.asyncIterator] !== 'function') throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
   if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');
-  if (typeof size !== 'number') throw new TypeError('Expected size to be a number');
+  if (typeof queueSize !== 'number') throw new TypeError('Expected queueSize to be a number');
 
-  /** @typedef {Promise<IteratorResult<R> & { bufferPromise: NextLookup }>} NextLookup */
+  /** @typedef {Promise<IteratorResult<R> & { queuePromise: QueuePromise }>} QueuePromise */
 
-  /** @type {Set<NextLookup>} */
-  const bufferedPromises = new Set();
+  /** @type {Set<QueuePromise>} */
+  const queuedPromises = new Set();
 
-  const completionTracker = createCompletionTracker();
+  /** @type {boolean} */
+  let done;
 
   // TODO: Check if it's already an async iterator?
   const asyncIterator = asyncIterable[Symbol.asyncIterator]();
 
   /** @returns {Promise<IteratorReturnResult<undefined>>} */
   const markAsEnded = async () => {
-    if (completionTracker.hasCompleted() === false) {
-      completionTracker.markAsCompleted();
-      bufferedPromises.clear();
+    if (!done) {
+      done = true;
+      queuedPromises.clear();
 
       if (asyncIterator.return) {
         await asyncIterator.return();
@@ -57,11 +52,11 @@ const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
   const queueNext = () => {
     // console.log('😳 queueNext', Date.now());
     // FIXME: Handle rejected promises from upstream! And properly mark this iterator as completed
-    /** @type {NextLookup} */
-    const next = asyncIterator.next()
+    /** @type {QueuePromise} */
+    const queuePromise = asyncIterator.next()
       // eslint-disable-next-line promise/prefer-await-to-then
       .then(async result => ({
-        bufferPromise: next,
+        queuePromise,
         ...(
           result.done
             ? result
@@ -71,40 +66,34 @@ const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
         )
       }));
 
-    bufferedPromises.add(next);
+    queuedPromises.add(queuePromise);
   };
 
-  for (let i = 0; i < size; i++) {
+  for (let i = 0; i < queueSize; i++) {
     queueNext();
   }
 
   /** @type {AsyncIterator<R>["next"]} */
   const nextValue = async () => {
-    // console.log('🤔 nextValue', Date.now());
-    if (bufferedPromises.size === 0) {
-      return markAsEnded();
-    }
-
-    if (completionTracker.hasCompleted()) {
-      return { done: true, value: undefined };
-    }
+    if (queuedPromises.size === 0) return markAsEnded();
+    if (done) return { done: true, value: undefined };
 
     // FIXME: Handle rejected promises! We need to remove it from bufferedPromises
-    const { bufferPromise, ...result } = await Promise.race(bufferedPromises);
+    // Wait for some of the current promises to be finished
+    const { queuePromise, ...result } = await Promise.race(queuedPromises);
 
-    bufferedPromises.delete(bufferPromise);
+    queuedPromises.delete(queuePromise);
 
-    // We are mandated by the spec to always return this if the iterator is done
-    if (completionTracker.hasCompleted()) {
+    // We are mandated by the spec to always do this return if the iterator is done
+    if (done) {
       return { done: true, value: undefined };
+    } else if (result.done) {
+      return queuedPromises.size === 0
+        ? markAsEnded()
+        : nextValue();
     }
 
-    if (result.done) {
-      if (bufferedPromises.size !== 0) return nextValue();
-      return markAsEnded();
-    }
-
-    if (bufferedPromises.size !== 0) {
+    if (queuedPromises.size !== 0) {
       queueNext();
     }
 
@@ -128,8 +117,4 @@ const bufferAsyncIterable = (asyncIterable, callback, size = 3) => {
   };
 
   return resultAsyncIterableIterator;
-};
-
-module.exports = {
-  bufferAsyncIterable
-};
+}

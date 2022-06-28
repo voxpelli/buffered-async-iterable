@@ -4,19 +4,19 @@
 
 'use strict';
 
-const chai = require('chai');
-const chaiAsPromised = require('chai-as-promised');
-const sinon = require('sinon');
-const sinonChai = require('sinon-chai');
+import chai from 'chai';
+import chaiAsPromised from 'chai-as-promised';
+import sinon from 'sinon';
+import sinonChai from 'sinon-chai';
+
+import {
+  map as bufferAsyncIterable,
+} from '../index.js';
 
 chai.use(chaiAsPromised);
 chai.use(sinonChai);
 
 const should = chai.should();
-
-const {
-  bufferAsyncIterable,
-} = require('../');
 
 /**
  * @param {number} delay
@@ -30,13 +30,13 @@ const promisableTimeout = (delay) => new Promise(resolve => setTimeout(resolve, 
  * @param {number|((i: number) => number)} wait
  * @returns {AsyncIterable<number>}
  */
-const yieldValuesOverTime = async function * (count, wait) {
+async function * yieldValuesOverTime (count, wait) {
   const waitCallback = typeof wait === 'number' ? () => wait : wait;
   for (let i = 0; i < count; i++) {
     yield i;
     await promisableTimeout(waitCallback(i));
   }
-};
+}
 
 describe('bufferAsyncIterable()', () => {
   afterEach(() => {
@@ -66,7 +66,7 @@ describe('bufferAsyncIterable()', () => {
         bufferAsyncIterable(
           asyncIterable,
           // @ts-ignore
-          true
+          { queueSize: true }
         );
       }, TypeError, 'Expected callback to be a function');
     });
@@ -78,9 +78,9 @@ describe('bufferAsyncIterable()', () => {
           asyncIterable,
           async () => {},
           // @ts-ignore
-          true
+          { queueSize: true }
         );
-      }, TypeError, 'Expected size to be a number');
+      }, TypeError, 'Expected queueSize to be a number');
     });
 
     it('should return an AsyncIterable when provided with required arguments', () => {
@@ -102,7 +102,7 @@ describe('bufferAsyncIterable()', () => {
       const bufferedAsyncIterable = bufferAsyncIterable(
         asyncIterable,
         async () => {},
-        10
+        { queueSize: 10 }
       );
 
       should.exist(bufferedAsyncIterable);
