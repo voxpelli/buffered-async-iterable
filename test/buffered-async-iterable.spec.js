@@ -49,7 +49,7 @@ describe('bufferAsyncIterable()', () => {
         // @ts-ignore
         // eslint-disable-next-line no-unused-vars, no-empty
         bufferAsyncIterable();
-      }, TypeError, 'Expected asyncIterable to be provided');
+      }, TypeError, 'Expected input to be provided');
     });
 
     it('should throw when provided asyncIterable is not an asyncIterable', () => {
@@ -103,6 +103,19 @@ describe('bufferAsyncIterable()', () => {
         asyncIterable,
         async () => {},
         { queueSize: 10 }
+      );
+
+      should.exist(bufferedAsyncIterable);
+      bufferedAsyncIterable.should.be.an('object');
+
+      should.exist(bufferedAsyncIterable[Symbol.asyncIterator]);
+      bufferedAsyncIterable[Symbol.asyncIterator].should.be.a('function');
+    });
+
+    it('should return an AsyncIterable when provided with an array value', () => {
+      const bufferedAsyncIterable = bufferAsyncIterable(
+        ['a', 'b', 'c'],
+        async () => {}
       );
 
       should.exist(bufferedAsyncIterable);
@@ -244,6 +257,34 @@ describe('bufferAsyncIterable()', () => {
         result.should.deep.equal(expectedResult);
         duration.should.equal(4300);
       });
+    });
+
+    it('should return all values from the original AsyncIterable when given as an array', async () => {
+      // Create the promise first, then have it be fully executed using clock.runAllAsync()
+      const promisedResult = (async () => {
+        const rawResult = [];
+
+        let i = 0;
+
+        for await (const value of bufferAsyncIterable([10, 20, 30], async (item) => {
+          await promisableTimeout(i++ % 2 === 1 ? 2000 : 100);
+          return item;
+        })) {
+          rawResult.push(value);
+        }
+
+        /** @type {[number[], number]} */
+        const result = [rawResult, Date.now()];
+
+        return result;
+      })();
+
+      await clock.runAllAsync();
+
+      const [result, duration] = await promisedResult;
+
+      result.should.deep.equal([10, 30, 20]);
+      duration.should.equal(2000);
     });
 
     describe('buffering', () => {

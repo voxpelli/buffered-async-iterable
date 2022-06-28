@@ -9,32 +9,46 @@
 
 /**
  * @template T
+ * @param {T[]} input
+ * @returns {AsyncIterable<T>}
+ */
+async function * makeArrayIntoAsyncIterable (input) {
+  for await (const value of input) {
+    yield value;
+  }
+}
+
+/**
+ * @template T
  * @template R
- * @param {AsyncIterable<T>} asyncIterable
+ * @param {AsyncIterable<T> | T[]} input
  * @param {(item: T) => Promise<R>} callback
  * @param {{ queueSize?: number|undefined }} [options]
  * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]> }}
  */
-export function map (asyncIterable, callback, options) {
+export function map (input, callback, options) {
+  /** @typedef {Promise<IteratorResult<R> & { queuePromise: QueuePromise }>} QueuePromise */
+
   const {
     queueSize = 3,
   } = options || {};
 
-  if (!asyncIterable) throw new TypeError('Expected asyncIterable to be provided');
+  const asyncIterable = Array.isArray(input)
+    ? makeArrayIntoAsyncIterable(input)
+    : input;
+
+  if (!input) throw new TypeError('Expected input to be provided');
   if (typeof asyncIterable[Symbol.asyncIterator] !== 'function') throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
   if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');
   if (typeof queueSize !== 'number') throw new TypeError('Expected queueSize to be a number');
 
-  /** @typedef {Promise<IteratorResult<R> & { queuePromise: QueuePromise }>} QueuePromise */
-
+  // TODO: Check if it's already an async iterator?
+  const asyncIterator = asyncIterable[Symbol.asyncIterator]();
   /** @type {Set<QueuePromise>} */
   const queuedPromises = new Set();
 
   /** @type {boolean} */
   let done;
-
-  // TODO: Check if it's already an async iterator?
-  const asyncIterator = asyncIterable[Symbol.asyncIterator]();
 
   /** @returns {Promise<IteratorReturnResult<undefined>>} */
   const markAsEnded = async () => {
@@ -49,7 +63,11 @@ export function map (asyncIterable, callback, options) {
     return { done: true, value: undefined };
   };
 
-  const queueNext = () => {
+  const fillQueue = () => {
+    if (done) {
+      throw new Error('Tried to fill queue when async iterator is marked as done');
+    }
+
     // console.log('😳 queueNext', Date.now());
     // FIXME: Handle rejected promises from upstream! And properly mark this iterator as completed
     /** @type {QueuePromise} */
@@ -67,11 +85,11 @@ export function map (asyncIterable, callback, options) {
       }));
 
     queuedPromises.add(queuePromise);
-  };
 
-  for (let i = 0; i < queueSize; i++) {
-    queueNext();
-  }
+    if (queuedPromises.size < queueSize) {
+      fillQueue();
+    }
+  };
 
   /** @type {AsyncIterator<R>["next"]} */
   const nextValue = async () => {
@@ -94,7 +112,7 @@ export function map (asyncIterable, callback, options) {
     }
 
     if (queuedPromises.size !== 0) {
-      queueNext();
+      fillQueue();
     }
 
     return { value: result.value };
@@ -115,6 +133,8 @@ export function map (asyncIterable, callback, options) {
 
     [Symbol.asyncIterator]: () => resultAsyncIterableIterator,
   };
+
+  fillQueue();
 
   return resultAsyncIterableIterator;
 }
