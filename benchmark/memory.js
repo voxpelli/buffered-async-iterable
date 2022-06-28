@@ -3,7 +3,7 @@
 /* eslint-disable no-console */
 
 import { writeFile } from 'node:fs/promises';
-import { getHeapSnapshot } from 'v8';
+import { getHeapSnapshot } from 'node:v8';
 import memwatch from '@airbnb/node-memwatch';
 
 import { map } from '../index.js';

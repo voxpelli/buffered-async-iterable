@@ -25,7 +25,7 @@ const isAsyncIterable = (value) => Boolean(value && value[Symbol.asyncIterator])
  * @returns {AsyncIterable<T>}
  */
 async function * makeIterableAsync (input) {
-  for await (const value of [...input]) {
+  for (const value of input) {
     yield value;
   }
 }
@@ -122,7 +122,7 @@ export function map (input, callback, options) {
 
     // FIXME: Handle rejected promises! We need to remove it from bufferedPromises
     // Wait for some of the current promises to be finished
-    const { queuePromise, fromSubIterator, ...result } = await Promise.race(queuedPromises);
+    const { fromSubIterator, queuePromise, ...result } = await Promise.race(queuedPromises);
 
     queuedPromises.delete(queuePromise);
 

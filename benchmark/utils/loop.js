@@ -80,7 +80,7 @@ export const bufferedLoopWithRealAsyncPayload = async (iterations, callback) => 
  * @param {number|undefined} referenceTime
  * @param {LoopResult} result
  */
-export const logLoopResult = (name, referenceTime, { rawResult, duration, maxLag }) => {
+export const logLoopResult = (name, referenceTime, { duration, maxLag, rawResult }) => {
   console.log(`${name}: Iterated over ${rawResult.length} items:`, rawResult.slice(0, 5).join(', ')); // eslint-disable-line no-console
   console.log(`${name}: Max lag experienced: ${maxLag} ms`); // eslint-disable-line no-console
 
