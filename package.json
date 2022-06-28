@@ -21,6 +21,7 @@
     "check:installed-check": "installed-check -i eslint-plugin-jsdoc",
     "check:lint": "eslint .",
     "check:tsc": "tsc",
+    "check:type-coverage": "typescript-coverage-report --strict --threshold 95 -i 'benchmark/**/*.js'",
     "check": "run-s clean && run-p check:*",
     "clean:declarations": "rm -rf $(find . -maxdepth 2 -type f -name '*.d.ts')",
     "clean": "run-p clean:*",
@@ -54,12 +55,12 @@
     "@types/sinon": "^10.0.2",
     "@types/sinon-chai": "^3.2.5",
     "@voxpelli/eslint-config": "^14.1.0",
-    "@voxpelli/tsconfig": "^2.1.0",
+    "@voxpelli/tsconfig": "^4.0.0",
     "0x": "^4.10.2",
     "c8": "^7.8.0",
     "chai": "^4.3.4",
     "chai-as-promised": "^7.1.1",
-    "dependency-check": "^4.1.0",
+    "dependency-check": "^5.0.0-7",
     "eslint": "^8.18.0",
     "eslint-config-standard": "^17.0.0",
     "eslint-plugin-es": "^4.1.0",
@@ -72,11 +73,12 @@
     "eslint-plugin-sort-destructure-keys": "^1.4.0",
     "eslint-plugin-unicorn": "^42.0.0",
     "ghat": "^0.14.0",
-    "installed-check": "^5.0.0-0",
+    "installed-check": "^6.0.1",
     "mocha": "^9.0.3",
-    "npm-run-all": "^4.1.5",
+    "npm-run-all2": "^6.0.1",
     "sinon": "^11.1.2",
     "sinon-chai": "^3.7.0",
-    "typescript": "^4.3.5"
+    "typescript": "~4.6.0",
+    "typescript-coverage-report": "^0.6.4"
   }
 }

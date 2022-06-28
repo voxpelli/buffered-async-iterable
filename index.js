@@ -45,12 +45,13 @@ export function map (input, callback, options) {
     queueSize = 3,
   } = options || {};
 
+  /** @type {AsyncIterable<T>} */
   const asyncIterable = (isIterable(input) || Array.isArray(input))
     ? makeIterableAsync(input)
     : input;
 
   if (!input) throw new TypeError('Expected input to be provided');
-  if (typeof asyncIterable[Symbol.asyncIterator] !== 'function') throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
+  if (!isAsyncIterable(asyncIterable)) throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
   if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');
   if (typeof queueSize !== 'number') throw new TypeError('Expected queueSize to be a number');
 
