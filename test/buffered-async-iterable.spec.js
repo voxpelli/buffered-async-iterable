@@ -38,6 +38,20 @@ async function * yieldValuesOverTime (count, wait) {
   }
 }
 
+/**
+ * @param {number} count
+ * @param {number|((i: number) => number)} wait
+ * @param {string} prefix
+ * @returns {AsyncIterable<string>}
+ */
+async function * yieldValuesOverTimeWithPrefix (count, wait, prefix) {
+  const waitCallback = typeof wait === 'number' ? () => wait : wait;
+  for (let i = 0; i < count; i++) {
+    yield prefix + i;
+    await promisableTimeout(waitCallback(i));
+  }
+}
+
 describe('bufferAsyncIterable()', () => {
   afterEach(() => {
     sinon.restore();
@@ -115,6 +129,19 @@ describe('bufferAsyncIterable()', () => {
     it('should return an AsyncIterable when provided with an array value', () => {
       const bufferedAsyncIterable = bufferAsyncIterable(
         ['a', 'b', 'c'],
+        async () => {}
+      );
+
+      should.exist(bufferedAsyncIterable);
+      bufferedAsyncIterable.should.be.an('object');
+
+      should.exist(bufferedAsyncIterable[Symbol.asyncIterator]);
+      bufferedAsyncIterable[Symbol.asyncIterator].should.be.a('function');
+    });
+
+    it('should return an AsyncIterable when provided with a Set value', () => {
+      const bufferedAsyncIterable = bufferAsyncIterable(
+        new Set(['a', 'b', 'c']),
         async () => {}
       );
 
@@ -285,6 +312,45 @@ describe('bufferAsyncIterable()', () => {
 
       result.should.deep.equal([10, 30, 20]);
       duration.should.equal(2000);
+    });
+
+    it('should handle nested async generator values from the original AsyncIterable when looped over', async () => {
+      // Create the promise first, then have it be fully executed using clock.runAllAsync()
+      const promisedResult = (async () => {
+        const rawResult = [];
+
+        for await (const value of bufferAsyncIterable(baseAsyncIterable, async function * (item) {
+          yield * yieldValuesOverTimeWithPrefix(2, (i) => i % 2 === 1 ? 2000 : 100, 'prefix-' + item + '-');
+        })) {
+          rawResult.push(value);
+        }
+
+        /** @type {[string[], number]} */
+        const result = [rawResult, Date.now()];
+
+        return result;
+      })();
+
+      await clock.runAllAsync();
+
+      const [result, duration] = await promisedResult;
+
+      result.should.deep.equal([
+        'prefix-0-0',
+        'prefix-0-1',
+        'prefix-1-0',
+        'prefix-1-1',
+        'prefix-2-0',
+        'prefix-2-1',
+        'prefix-3-0',
+        'prefix-3-1',
+        'prefix-4-0',
+        'prefix-4-1',
+        'prefix-5-0',
+        'prefix-5-1',
+      ]);
+      // TODO: Calculate whether this makes sense
+      duration.should.equal(14700);
     });
 
     describe('buffering', () => {
