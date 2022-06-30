@@ -11,7 +11,7 @@ TODO: Fill in
 ### Simple
 
 ```javascript
-const { map } = require('buffered-async-iterable');
+const { map } = require('async-iterable-prefetch');
 
 (async () => {
   const mappedData = map(asyncIterable, async (item) => {
