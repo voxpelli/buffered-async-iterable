@@ -32,6 +32,48 @@ async function * makeIterableAsync (input) {
 
 /**
  * @template T
+ * @template {object} R
+ * @param {Set<T>} target
+ * @param {Set<R>} source
+ * @param {WeakMap<R,T>} mapping
+ * @returns {T|undefined}
+ */
+function findLeastMapped (target, source, mapping) {
+  /** @type {Map<T,number>} */
+  const countTracker = new Map();
+
+  for (const item of source) {
+    const mappedItem = mapping.get(item);
+
+    if (mappedItem) {
+      const trackedCount = countTracker.get(mappedItem);
+      countTracker.set(mappedItem, (trackedCount || 0) + 1);
+    }
+  }
+
+  /** @type {number|undefined} */
+  let leastCount;
+  /** @type {T|undefined} */
+  let matchingItem;
+
+  for (const item of target) {
+    const trackedCount = countTracker.get(item);
+
+    if (trackedCount === undefined) {
+      return item;
+    }
+
+    if (leastCount === undefined || trackedCount < leastCount) {
+      leastCount = trackedCount;
+      matchingItem = item;
+    }
+  }
+
+  return matchingItem;
+}
+
+/**
+ * @template T
  * @template R
  * @param {AsyncIterable<T> | Iterable<T> | T[]} input
  * @param {(item: T) => (Promise<R>|AsyncIterable<R>)} callback
@@ -64,6 +106,9 @@ export function map (input, callback, options) {
   /** @type {Set<QueuePromise>} */
   const queuedPromises = new Set();
 
+  /** @type {WeakMap<QueuePromise, AsyncIterator<R>>} */
+  const mapPromisesToSourceSubIterator = new WeakMap();
+
   /** @type {boolean} */
   let done;
 
@@ -83,7 +128,7 @@ export function map (input, callback, options) {
   const fillQueue = () => {
     if (done) return;
 
-    const subIterator = subIterators.size && [...subIterators][0];
+    const subIterator = findLeastMapped(subIterators, queuedPromises, mapPromisesToSourceSubIterator);
 
     // FIXME: Handle rejected promises from upstream! And properly mark this iterator as completed
     /** @type {QueuePromise} */
@@ -123,6 +168,10 @@ export function map (input, callback, options) {
 
           return promiseValue;
         });
+
+    if (subIterator) {
+      mapPromisesToSourceSubIterator.set(queuePromise, subIterator);
+    }
 
     queuedPromises.add(queuePromise);
 

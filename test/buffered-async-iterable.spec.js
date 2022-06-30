@@ -331,7 +331,7 @@ describe('bufferAsyncIterable()', () => {
 
       const [result, duration] = await promisedResult;
 
-      result.should.deep.equal([
+      result.should.be.an('array').of.length(12).with.members([
         'prefix-0-0',
         'prefix-0-1',
         'prefix-1-0',
@@ -346,7 +346,7 @@ describe('bufferAsyncIterable()', () => {
         'prefix-5-1',
       ]);
       // TODO: Calculate whether this makes sense
-      duration.should.equal(14700);
+      duration.should.equal(10500);
     });
 
     it('should leave nested async generators unless told to care', async () => {
