@@ -94,11 +94,15 @@ export function map (input, callback, options) {
           if (result.done) {
             subIterators.delete(subIterator);
           }
-          return {
+
+          /** @type {Awaited<QueuePromise>} */
+          const promiseValue = {
             queuePromise,
             fromSubIterator: true,
             ...result
           };
+
+          return promiseValue;
         })
       : asyncIterator.next()
         // eslint-disable-next-line promise/prefer-await-to-then
@@ -110,11 +114,14 @@ export function map (input, callback, options) {
           // eslint-disable-next-line promise/no-callback-in-promise
           const callbackResult = callback(result.value);
 
-          return {
+          /** @type {Awaited<QueuePromise>} */
+          const promiseValue = {
             queuePromise,
             isSubIterator: isAsyncIterable(callbackResult),
             value: await callbackResult,
           };
+
+          return promiseValue;
         });
 
     queuedPromises.add(queuePromise);
