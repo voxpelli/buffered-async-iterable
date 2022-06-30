@@ -147,6 +147,24 @@ describe('bufferAsyncIterable()', () => {
       should.exist(bufferedAsyncIterable[Symbol.asyncIterator]);
       bufferedAsyncIterable[Symbol.asyncIterator].should.be.a('function');
     });
+
+    it('should return an AsyncIterable when provided when chained with itself', () => {
+      const asyncIterable = (async function * () {})();
+      const chainedBufferedAsyncIterable = bufferAsyncIterable(
+        asyncIterable,
+        async () => {}
+      );
+      const bufferedAsyncIterable = bufferAsyncIterable(
+        chainedBufferedAsyncIterable,
+        async () => {}
+      );
+
+      should.exist(bufferedAsyncIterable);
+      bufferedAsyncIterable.should.be.an('object');
+
+      should.exist(bufferedAsyncIterable[Symbol.asyncIterator]);
+      bufferedAsyncIterable[Symbol.asyncIterator].should.be.a('function');
+    });
   });
 
   describe('values', () => {
@@ -310,7 +328,7 @@ describe('bufferAsyncIterable()', () => {
       duration.should.equal(2000);
     });
 
-    it('should handle nested async generator values from the original AsyncIterable when looped over', async () => {
+    it('should handle chained async generator values from the original AsyncIterable when looped over', async () => {
       // Create the promise first, then have it be fully executed using clock.runAllAsync()
       const promisedResult = (async () => {
         const rawResult = [];
@@ -396,6 +414,31 @@ describe('bufferAsyncIterable()', () => {
       const [result, duration] = await promisedResult;
 
       result.should.be.an('array').of.length(6).which.containAll(item => item.should.be.an('AsyncGenerator'));
+      duration.should.equal(6300);
+    });
+
+    it('should return all values from the original AsyncIterable when chained to itself', async () => {
+      const chainedBufferedAsyncIterable = bufferAsyncIterable(baseAsyncIterable, async (item) => item);
+
+      // Create the promise first, then have it be fully executed using clock.runAllAsync()
+      const promisedResult = (async () => {
+        const rawResult = [];
+
+        for await (const value of bufferAsyncIterable(chainedBufferedAsyncIterable, async (item) => item)) {
+          rawResult.push(value);
+        }
+
+        /** @type {[number[], number]} */
+        const result = [rawResult, Date.now()];
+
+        return result;
+      })();
+
+      await clock.runAllAsync();
+
+      const [result, duration] = await promisedResult;
+
+      result.should.deep.equal(expectedResult);
       duration.should.equal(6300);
     });
 
