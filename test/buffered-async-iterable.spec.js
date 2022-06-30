@@ -346,7 +346,7 @@ describe('bufferAsyncIterable()', () => {
         'prefix-5-1',
       ]);
       // TODO: Calculate whether this makes sense
-      duration.should.equal(10500);
+      duration.should.equal(8400);
     });
 
     it('should leave nested async generators unless told to care', async () => {

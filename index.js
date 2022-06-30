@@ -21,6 +21,14 @@ const isAsyncIterable = (value) => Boolean(value && value[Symbol.asyncIterator])
 
 /**
  * @template T
+ * @param {any} value
+ * @param {Set<T>} set
+ * @returns {value is T}
+ */
+const isPartOfSet = (value, set) => set.has(value);
+
+/**
+ * @template T
  * @param {Iterable<T> | T[]} input
  * @returns {AsyncIterable<T>}
  */
@@ -33,7 +41,7 @@ async function * makeIterableAsync (input) {
 /**
  * @template T
  * @template {object} R
- * @param {Set<T>} target
+ * @param {Iterable<T> | T[]} target
  * @param {Set<R>} source
  * @param {WeakMap<R,T>} mapping
  * @returns {T|undefined}
@@ -106,8 +114,11 @@ export function map (input, callback, options) {
   /** @type {Set<QueuePromise>} */
   const queuedPromises = new Set();
 
-  /** @type {WeakMap<QueuePromise, AsyncIterator<R>>} */
-  const mapPromisesToSourceSubIterator = new WeakMap();
+  /** @type {WeakMap<QueuePromise, AsyncIterator<T>|AsyncIterator<R>>} */
+  const mapPromisesToSourceIterator = new WeakMap();
+
+  /** @type {boolean} */
+  let mainReturnedDone;
 
   /** @type {boolean} */
   let done;
@@ -128,7 +139,13 @@ export function map (input, callback, options) {
   const fillQueue = () => {
     if (done) return;
 
-    const subIterator = findLeastMapped(subIterators, queuedPromises, mapPromisesToSourceSubIterator);
+    const iterator = findLeastMapped(
+      mainReturnedDone ? subIterators : [...subIterators, asyncIterator],
+      queuedPromises,
+      mapPromisesToSourceIterator
+    );
+
+    const subIterator = isPartOfSet(iterator, subIterators) && iterator;
 
     // FIXME: Handle rejected promises from upstream! And properly mark this iterator as completed
     /** @type {QueuePromise} */
@@ -153,6 +170,7 @@ export function map (input, callback, options) {
         // eslint-disable-next-line promise/prefer-await-to-then
         .then(async result => {
           if (result.done) {
+            mainReturnedDone = true;
             return { queuePromise, ...result };
           }
 
@@ -169,10 +187,7 @@ export function map (input, callback, options) {
           return promiseValue;
         });
 
-    if (subIterator) {
-      mapPromisesToSourceSubIterator.set(queuePromise, subIterator);
-    }
-
+    mapPromisesToSourceIterator.set(queuePromise, subIterator || asyncIterator);
     queuedPromises.add(queuePromise);
 
     if (queuedPromises.size < queueSize) {
