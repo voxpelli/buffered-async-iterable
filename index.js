@@ -82,27 +82,47 @@ function findLeastMapped (target, source, mapping) {
 }
 
 /**
- * @typedef EventLoopEscapeTracker
- * @property {number} count
- * @property {number|undefined} limit
+ * Helps giving back control to the event loop every now and then in a promise heavy flow with little real async work
+ *
+ * @see https://www.nearform.com/blog/optimise-node-js-performance-avoiding-broken-promises/
  */
+class EventLoopBreather {
+  /** @type {number} */
+  #breathChecks = 0;
 
-/**
- * @template T
- * @param {Promise<T>} value
- * @param {EventLoopEscapeTracker} tracker
- * @returns {Promise<T>}
- */
-function allowForEventLoopEscape (value, tracker) {
-  if (!tracker.limit) return value;
+  /** @type {number|undefined} */
+  #breathEvery;
 
-  tracker.count += 1;
+  /**
+   * @param {number|undefined} breathEvery
+   */
+  constructor (breathEvery) {
+    if (breathEvery !== undefined) {
+      if (typeof breathEvery !== 'number') throw new TypeError('Expected breathEvery to be a number or undefined');
+      if (breathEvery < 1) throw new Error('Expected breathEvery to be above 0');
+    }
 
-  if (tracker.count < tracker.limit) return value;
+    this.#breathEvery = breathEvery;
+  }
 
-  tracker.count = 0;
+  /**
+   * Checks whether its time to let the event loop breathe for a bit a bit or not
+   *
+   * @template T
+   * @param {Promise<T>} value
+   * @returns {Promise<T>}
+   */
+  breathe (value) {
+    if (!this.#breathEvery) return value;
 
-  return new Promise(resolve => setImmediate(() => resolve(value)));
+    this.#breathChecks += 1;
+
+    if (this.#breathChecks < this.#breathEvery) return value;
+
+    this.#breathChecks = 0;
+
+    return new Promise(resolve => setImmediate(() => resolve(value)));
+  }
 }
 
 /**
@@ -130,10 +150,6 @@ export function map (input, callback, options) {
   if (!isAsyncIterable(asyncIterable)) throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
   if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');
   if (typeof queueSize !== 'number') throw new TypeError('Expected queueSize to be a number');
-  if (escapeToEventLoopEvery !== undefined) {
-    if (typeof escapeToEventLoopEvery !== 'number') throw new TypeError('Expected escapeToEventLoopEvery to be a number or undefined');
-    if (escapeToEventLoopEvery < 1) throw new Error('Expected escapeToEventLoopEvery to be above 0');
-  }
 
   const asyncIterator = asyncIterable[Symbol.asyncIterator]();
 
@@ -146,8 +162,7 @@ export function map (input, callback, options) {
   /** @type {WeakMap<QueuePromise, AsyncIterator<T>|AsyncIterator<R>>} */
   const mapPromisesToSourceIterator = new WeakMap();
 
-  /** @type {EventLoopEscapeTracker} */
-  const trackEventLoopEscape = { count: 0, limit: escapeToEventLoopEvery };
+  const breather = new EventLoopBreather(escapeToEventLoopEvery);
 
   /** @type {boolean} */
   let mainReturnedDone;
@@ -182,10 +197,7 @@ export function map (input, callback, options) {
     // FIXME: Handle rejected promises from upstream! And properly mark this iterator as completed
     /** @type {QueuePromise} */
     const queuePromise = subIterator
-      ? allowForEventLoopEscape(
-        subIterator.next(),
-        trackEventLoopEscape
-      )
+      ? breather.breathe(subIterator.next())
         // eslint-disable-next-line promise/prefer-await-to-then
         .then(async result => {
           if (result.done) {
@@ -201,10 +213,7 @@ export function map (input, callback, options) {
 
           return promiseValue;
         })
-      : allowForEventLoopEscape(
-        asyncIterator.next(),
-        trackEventLoopEscape
-      )
+      : breather.breathe(asyncIterator.next())
         // eslint-disable-next-line promise/prefer-await-to-then
         .then(async result => {
           if (result.done) {
