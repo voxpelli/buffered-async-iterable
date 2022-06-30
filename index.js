@@ -5,7 +5,8 @@
 // FIXME: Read up on https://tc39.es/ecma262/#table-async-iterator-optional and add return() and throw(). return() is called by a "for await" when eg. a "break" or a "throw" happens within it
 // TODO: Have option to persist order? To not use Promise.race()?
 // TODO: Make a proper merge for async iterables by accepting multiple input iterables, see: https://twitter.com/matteocollina/status/1392056092482576385
-// TODO: Look into adding setImmediate() and such to help with event loop lag
+
+// FIXME: Add tests for the event loop escaping
 
 /**
  * @param {any} value
@@ -81,17 +82,42 @@ function findLeastMapped (target, source, mapping) {
 }
 
 /**
+ * @typedef EventLoopEscapeTracker
+ * @property {number} count
+ * @property {number|undefined} limit
+ */
+
+/**
+ * @template T
+ * @param {Promise<T>} value
+ * @param {EventLoopEscapeTracker} tracker
+ * @returns {Promise<T>}
+ */
+function allowForEventLoopEscape (value, tracker) {
+  if (!tracker.limit) return value;
+
+  tracker.count += 1;
+
+  if (tracker.count < tracker.limit) return value;
+
+  tracker.count = 0;
+
+  return new Promise(resolve => setImmediate(() => resolve(value)));
+}
+
+/**
  * @template T
  * @template R
  * @param {AsyncIterable<T> | Iterable<T> | T[]} input
  * @param {(item: T) => (Promise<R>|AsyncIterable<R>)} callback
- * @param {{ queueSize?: number|undefined }} [options]
+ * @param {{ queueSize?: number|undefined, escapeToEventLoopEvery?: number|undefined }} [options]
  * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]> }}
  */
 export function map (input, callback, options) {
   /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { queuePromise: QueuePromise, fromSubIterator?: boolean, isSubIterator?: boolean }>} QueuePromise */
 
   const {
+    escapeToEventLoopEvery,
     queueSize = 6,
   } = options || {};
 
@@ -104,8 +130,11 @@ export function map (input, callback, options) {
   if (!isAsyncIterable(asyncIterable)) throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
   if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');
   if (typeof queueSize !== 'number') throw new TypeError('Expected queueSize to be a number');
+  if (escapeToEventLoopEvery !== undefined) {
+    if (typeof escapeToEventLoopEvery !== 'number') throw new TypeError('Expected escapeToEventLoopEvery to be a number or undefined');
+    if (escapeToEventLoopEvery < 1) throw new Error('Expected escapeToEventLoopEvery to be above 0');
+  }
 
-  // TODO: Check if it's already an async iterator?
   const asyncIterator = asyncIterable[Symbol.asyncIterator]();
 
   /** @type {Set<AsyncIterator<R>>} */
@@ -116,6 +145,9 @@ export function map (input, callback, options) {
 
   /** @type {WeakMap<QueuePromise, AsyncIterator<T>|AsyncIterator<R>>} */
   const mapPromisesToSourceIterator = new WeakMap();
+
+  /** @type {EventLoopEscapeTracker} */
+  const trackEventLoopEscape = { count: 0, limit: escapeToEventLoopEvery };
 
   /** @type {boolean} */
   let mainReturnedDone;
@@ -150,7 +182,10 @@ export function map (input, callback, options) {
     // FIXME: Handle rejected promises from upstream! And properly mark this iterator as completed
     /** @type {QueuePromise} */
     const queuePromise = subIterator
-      ? subIterator.next()
+      ? allowForEventLoopEscape(
+        subIterator.next(),
+        trackEventLoopEscape
+      )
         // eslint-disable-next-line promise/prefer-await-to-then
         .then(async result => {
           if (result.done) {
@@ -166,7 +201,10 @@ export function map (input, callback, options) {
 
           return promiseValue;
         })
-      : asyncIterator.next()
+      : allowForEventLoopEscape(
+        asyncIterator.next(),
+        trackEventLoopEscape
+      )
         // eslint-disable-next-line promise/prefer-await-to-then
         .then(async result => {
           if (result.done) {
