@@ -1,32 +1,20 @@
-env: {}
-
-# FILE GENERATED WITH: npx ghat voxpelli/ghatemplates/nodejs
-# SOURCE: https://github.com/voxpelli/ghatemplates
-# OPTIONS: {"set":["jobs.test.strategy.matrix.node_version=[12,14,15]"]}
-
 name: Node CI
+
 on:
-  - push
-  - pull_request
+  push:
+    branches:
+      - main
+    tags:
+      - '*'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
 jobs:
   test:
-    name: Node ${{ matrix.node_version }} on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        node_version:
-          - 12
-          - 14
-          - 15
-        os:
-          - ubuntu-latest
-          - windows-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Use Node.js ${{ matrix.node_version }}
-        uses: actions/setup-node@v2
-        with:
-          node-version: ${{ matrix.node_version }}
-      - run: yarn install
-      - run: yarn run test-ci
+    uses: voxpelli/ghatemplates/.github/workflows/test.yml@main
+    with:
+      node-versions: '14,16,18'
