@@ -92,7 +92,7 @@ export function map (input, callback, options) {
   /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { queuePromise: QueuePromise, fromSubIterator?: boolean, isSubIterator?: boolean }>} QueuePromise */
 
   const {
-    queueSize = 3,
+    queueSize = 6,
   } = options || {};
 
   /** @type {AsyncIterable<T>} */

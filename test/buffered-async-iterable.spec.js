@@ -345,8 +345,8 @@ describe('bufferAsyncIterable()', () => {
         'prefix-5-0',
         'prefix-5-1',
       ]);
-      // TODO: Calculate whether this makes sense
-      duration.should.equal(8400);
+
+      duration.should.equal(6400);
     });
 
     it('should leave nested async generators unless told to care', async () => {
@@ -418,7 +418,7 @@ describe('bufferAsyncIterable()', () => {
             const delay = item % 3 === 0 ? 100000 : 100;
             await promisableTimeout(delay);
             return item;
-          })) {
+          }, { queueSize: 3 })) {
             rawResult.push(value);
           }
 
@@ -454,7 +454,7 @@ describe('bufferAsyncIterable()', () => {
             const delay = item % 3 === 0 ? 100000 : 100;
             await promisableTimeout(delay);
             return item;
-          })) {
+          }, { queueSize: 3 })) {
             rawResult.push(value);
             if (value % 5 === 0) {
               await promisableTimeout(20000);
@@ -489,7 +489,7 @@ describe('bufferAsyncIterable()', () => {
       });
 
       it('should be called when a loop breaks', async () => {
-        const iterator = bufferAsyncIterable(baseAsyncIterable, async (item) => item);
+        const iterator = bufferAsyncIterable(baseAsyncIterable, async (item) => item, { queueSize: 3 });
 
         const promisedResult = (async () => {
           // eslint-disable-next-line no-unreachable-loop
