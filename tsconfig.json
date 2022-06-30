@@ -5,6 +5,7 @@
   ],
   "include": [
     "benchmark/**/*.js",
+    "lib/**/*.js",
     "test/**/*.js",
   ]
 }
