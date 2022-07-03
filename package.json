@@ -29,7 +29,7 @@
     "check:installed-check": "installed-check -i eslint-plugin-jsdoc",
     "check:lint": "eslint .",
     "check:tsc": "tsc",
-    "check:type-coverage": "typescript-coverage-report --strict --threshold 90 -i 'benchmark/**/*.js'",
+    "check:type-coverage": "typescript-coverage-report --strict --threshold 95 -i 'benchmark/**/*.js'",
     "check": "run-s clean && run-p check:*",
     "clean:declarations": "rm -rf $(find . -maxdepth 2 -type f -name '*.d.ts*')",
     "clean": "run-p clean:*",
