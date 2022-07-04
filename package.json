@@ -45,7 +45,8 @@
     "sync-gh-actions": "ghat",
     "test:mocha": "c8 --reporter=lcov --reporter text mocha 'test/**/*.spec.js'",
     "test-ci": "run-s test:*",
-    "test": "run-s check test:*"
+    "test": "run-s check test:*",
+    "prepare": "husky install"
   },
   "keywords": [],
   "author": "Pelle Wessman <pelle@kodfabrik.se> (http://kodfabrik.se/)",
@@ -82,6 +83,7 @@
     "eslint-plugin-sort-destructure-keys": "^1.4.0",
     "eslint-plugin-unicorn": "^42.0.0",
     "ghat": "^0.14.0",
+    "husky": "^8.0.1",
     "installed-check": "^6.0.1",
     "mocha": "^10.0.0",
     "npm-run-all2": "^6.0.1",
