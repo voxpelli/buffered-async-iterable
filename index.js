@@ -1,5 +1,3 @@
-/* eslint-disable func-style */
-
 // TODO: Get inspired by Matteos https://github.com/mcollina/hwp/blob/main/index.js, eg AbortController is nice?
 // FIXME: Check this https://twitter.com/matteocollina/status/1392056117128306691
 // FIXME: Read up on https://tc39.es/ecma262/#table-async-iterator-optional and add return() and throw(). return() is called by a "for await" when eg. a "break" or a "throw" happens within it

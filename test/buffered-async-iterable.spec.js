@@ -18,7 +18,6 @@ const should = chai.should();
  * @param {number} delay
  * @returns {Promise<void>}
  */
-// eslint-disable-next-line unicorn/consistent-function-scoping
 const promisableTimeout = (delay) => new Promise(resolve => setTimeout(resolve, delay));
 
 /**
@@ -57,7 +56,6 @@ describe('bufferAsyncIterable()', () => {
     it('should throw on falsy asyncIterable argument', () => {
       should.Throw(() => {
         // @ts-ignore
-        // eslint-disable-next-line no-unused-vars, no-empty
         bufferAsyncIterable();
       }, TypeError, 'Expected input to be provided');
     });
@@ -65,7 +63,6 @@ describe('bufferAsyncIterable()', () => {
     it('should throw when provided asyncIterable is not an asyncIterable', () => {
       should.Throw(() => {
         // @ts-ignore
-        // eslint-disable-next-line no-unused-vars, no-empty
         bufferAsyncIterable(true);
       }, TypeError, 'Expected asyncIterable to have a Symbol.asyncIterator function');
     });
