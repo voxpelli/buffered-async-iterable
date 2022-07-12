@@ -36,7 +36,7 @@ const asyncIterable = (async function * () {
 /** @type {memwatch.HeapDiff} */
 let heapDiff;
 
-Promise.resolve().then(async () => {
+await Promise.resolve().then(async () => {
   // Take first snapshot
   heapDiff = new memwatch.HeapDiff();
 
@@ -76,8 +76,4 @@ Promise.resolve().then(async () => {
       if (DEBUG_LOGGING) console.log('Heap diff:', JSON.stringify(diff, undefined, 2));
       console.log('...result is satisfactory!');
     }
-  })
-  .catch(err => {
-    console.error('Error:', err);
-    process.exit(1);
   });
