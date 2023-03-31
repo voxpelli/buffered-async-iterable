@@ -64,7 +64,7 @@
     "@types/sinon": "^10.0.11",
     "@types/sinon-chai": "^3.2.8",
     "@voxpelli/eslint-config": "^15.0.0",
-    "@voxpelli/tsconfig": "^4.0.0",
+    "@voxpelli/tsconfig": "^7.0.0",
     "0x": "^5.3.1",
     "c8": "^7.11.3",
     "chai": "^4.3.6",
@@ -89,7 +89,7 @@
     "npm-run-all2": "^6.0.1",
     "sinon": "^14.0.0",
     "sinon-chai": "^3.7.0",
-    "typescript": "~4.6.0",
+    "typescript": "~5.0.3",
     "typescript-coverage-report": "^0.6.4"
   }
 }
