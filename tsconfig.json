@@ -1,5 +1,5 @@
 {
-  "extends": "@voxpelli/tsconfig/node14.json",
+  "extends": "@voxpelli/tsconfig/node16.json",
   "files": [
     "index.js",
   ],
@@ -7,9 +7,5 @@
     "benchmark/**/*.js",
     "lib/**/*.js",
     "test/**/*.js",
-  ],
-  "compilerOptions": {
-    "module": "ES2022",
-    "moduleResolution": "node"
-  }
+  ]
 }
