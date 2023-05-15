@@ -35,9 +35,10 @@ export function map (input, callback, options) {
   if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');
   if (typeof queueSize !== 'number') throw new TypeError('Expected queueSize to be a number');
 
+  /** @type {AsyncIterator<T, unknown>} */
   const asyncIterator = asyncIterable[Symbol.asyncIterator]();
 
-  /** @type {Set<AsyncIterator<R>>} */
+  /** @type {Set<AsyncIterator<R, unknown>>} */
   const subIterators = new Set();
 
   /** @type {Set<QueuePromise>} */

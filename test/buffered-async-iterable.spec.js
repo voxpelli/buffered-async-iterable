@@ -15,6 +15,12 @@ chai.use(sinonChai);
 const should = chai.should();
 
 /**
+ * @param {unknown} item
+ * @returns {boolean}
+ */
+const isAsyncGenerator = item => item && typeof item === 'object' ? Symbol.toStringTag in item && item[Symbol.toStringTag] === 'AsyncGenerator' : false;
+
+/**
  * @param {number} delay
  * @returns {Promise<void>}
  */
@@ -188,6 +194,7 @@ describe('bufferAsyncIterable()', () => {
       it('should return all values when looped over ', async () => {
         // Create the promise first, then have it be fully executed using clock.runAllAsync()
         const promisedResult = (async () => {
+          /** @type {number[]} */
           const rawResult = [];
 
           for await (const value of baseAsyncIterable) {
@@ -211,9 +218,10 @@ describe('bufferAsyncIterable()', () => {
       it('should return all values when accessed directly ', async () => {
         // Create the promise first, then have it be fully executed using clock.runAllAsync()
         const promisedResult = (async () => {
+          /** @type {AsyncIterator<number, void>} */
           const asyncIterator = baseAsyncIterable[Symbol.asyncIterator]();
 
-          /** @type {Promise<IteratorResult<number>>[]} */
+          /** @type {Promise<IteratorResult<number, void>>[]} */
           const iterations = [];
 
           for (let i = 0; i < count; i++) {
@@ -222,7 +230,7 @@ describe('bufferAsyncIterable()', () => {
 
           const rawResult = await Promise.all(iterations);
 
-          /** @type {[number[], number]} */
+          /** @type {[(number|void)[], number]} */
           const result = [
             rawResult.map(item => item.value),
             Date.now(),
@@ -244,6 +252,7 @@ describe('bufferAsyncIterable()', () => {
       it('should return all values from the original AsyncIterable when looped over ', async () => {
         // Create the promise first, then have it be fully executed using clock.runAllAsync()
         const promisedResult = (async () => {
+          /** @type {number[]} */
           const rawResult = [];
 
           for await (const value of bufferAsyncIterable(baseAsyncIterable, async (item) => item)) {
@@ -270,7 +279,7 @@ describe('bufferAsyncIterable()', () => {
           const asyncIterable = bufferAsyncIterable(baseAsyncIterable, async (item) => item);
           const asyncIterator = asyncIterable[Symbol.asyncIterator]();
 
-          /** @type {Promise<IteratorResult<number>>[]} */
+          /** @type {Promise<IteratorResult<number, void>>[]} */
           const iterations = [];
 
           for (let i = 0; i < count; i++) {
@@ -279,7 +288,7 @@ describe('bufferAsyncIterable()', () => {
 
           const rawResult = await Promise.all(iterations);
 
-          /** @type {[number[], number]} */
+          /** @type {[(number|void)[], number]} */
           const result = [
             rawResult.map(item => item.value),
             Date.now(),
@@ -300,6 +309,7 @@ describe('bufferAsyncIterable()', () => {
     it('should return all values from the original AsyncIterable when given as an array', async () => {
       // Create the promise first, then have it be fully executed using clock.runAllAsync()
       const promisedResult = (async () => {
+        /** @type {number[]} */
         const rawResult = [];
 
         let i = 0;
@@ -328,6 +338,7 @@ describe('bufferAsyncIterable()', () => {
     it('should handle chained async generator values from the original AsyncIterable when looped over', async () => {
       // Create the promise first, then have it be fully executed using clock.runAllAsync()
       const promisedResult = (async () => {
+        /** @type {string[]} */
         const rawResult = [];
 
         for await (const value of bufferAsyncIterable(baseAsyncIterable, async function * (item) {
@@ -367,6 +378,7 @@ describe('bufferAsyncIterable()', () => {
     it('should leave nested async generators unless told to care', async () => {
       // Create the promise first, then have it be fully executed using clock.runAllAsync()
       const promisedResult = (async () => {
+        /** @type {AsyncIterable<string>[]} */
         const rawResult = [];
 
         for await (const value of bufferAsyncIterable(baseAsyncIterable, async function * (item) {
@@ -385,13 +397,14 @@ describe('bufferAsyncIterable()', () => {
 
       const [result, duration] = await promisedResult;
 
-      result.should.be.an('array').of.length(6).which.containAll(item => item.should.be.an('AsyncGenerator'));
+      result.should.be.an('array').of.length(6).which.containAll(item => isAsyncGenerator(item));
       duration.should.equal(6300);
     });
 
     it('should leave async generator return values alone', async () => {
       // Create the promise first, then have it be fully executed using clock.runAllAsync()
       const promisedResult = (async () => {
+        /** @type {AsyncIterable<string>[]} */
         const rawResult = [];
 
         for await (const value of bufferAsyncIterable(baseAsyncIterable, async function (item) {
@@ -410,7 +423,7 @@ describe('bufferAsyncIterable()', () => {
 
       const [result, duration] = await promisedResult;
 
-      result.should.be.an('array').of.length(6).which.containAll(item => item.should.be.an('AsyncGenerator'));
+      result.should.be.an('array').of.length(6).which.containAll(item => isAsyncGenerator(item));
       duration.should.equal(6300);
     });
 
@@ -419,6 +432,7 @@ describe('bufferAsyncIterable()', () => {
 
       // Create the promise first, then have it be fully executed using clock.runAllAsync()
       const promisedResult = (async () => {
+        /** @type {number[]} */
         const rawResult = [];
 
         for await (const value of bufferAsyncIterable(chainedBufferedAsyncIterable, async (item) => item)) {
@@ -452,6 +466,7 @@ describe('bufferAsyncIterable()', () => {
 
         // Create the promise first, then have it be fully executed using clock.runAllAsync()
         const promisedResult = (async () => {
+          /** @type {number[]} */
           const rawResult = [];
 
           for await (const value of bufferAsyncIterable(baseAsyncIterable, async (item) => {
@@ -488,6 +503,7 @@ describe('bufferAsyncIterable()', () => {
 
         // Create the promise first, then have it be fully executed using clock.runAllAsync()
         const promisedResult = (async () => {
+          /** @type {number[]} */
           const rawResult = [];
 
           for await (const value of bufferAsyncIterable(baseAsyncIterable, async (item) => {

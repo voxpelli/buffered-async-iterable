@@ -35,7 +35,7 @@
     "check:installed-check": "installed-check -i eslint-plugin-jsdoc",
     "check:lint": "eslint --report-unused-disable-directives .",
     "check:tsc": "tsc",
-    "check:type-coverage": "typescript-coverage-report --strict --threshold 95 -i 'benchmark/**/*.js'",
+    "check:type-coverage": "type-coverage --detail --strict --at-least 95 --ignore-files 'benchmark/*' --ignore-files 'benchmark/*/*'",
     "check": "run-s clean && run-p check:*",
     "clean:declarations": "rm -rf $(find . -maxdepth 2 -type f -name '*.d.ts*')",
     "clean": "run-p clean:*",
@@ -59,12 +59,13 @@
     "@types/airbnb__node-memwatch": "^2.0.0",
     "@types/chai": "^4.3.1",
     "@types/chai-as-promised": "^7.1.5",
+    "@types/chai-quantifiers": "^1.0.1",
     "@types/mocha": "^9.1.1",
     "@types/node": "^16.18.30",
     "@types/sinon": "^10.0.11",
     "@types/sinon-chai": "^3.2.8",
     "@voxpelli/eslint-config": "^16.0.7",
-    "@voxpelli/tsconfig": "^4.0.0",
+    "@voxpelli/tsconfig": "^7.0.0",
     "0x": "^5.3.1",
     "c8": "^7.11.3",
     "chai": "^4.3.6",
@@ -89,7 +90,7 @@
     "npm-run-all2": "^6.0.1",
     "sinon": "^14.0.0",
     "sinon-chai": "^3.7.0",
-    "typescript": "~4.6.0",
-    "typescript-coverage-report": "^0.6.4"
+    "type-coverage": "^2.25.3",
+    "typescript": "~5.0.4"
   }
 }

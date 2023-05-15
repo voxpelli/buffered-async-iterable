@@ -59,6 +59,7 @@ await Promise.resolve().then(async () => {
   console.log('Checking memory usage result...');
 })
   .then(async () => {
+    // @ts-ignore
     global.gc();
     await asyncTimeout(1000);
 
