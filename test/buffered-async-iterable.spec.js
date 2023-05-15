@@ -225,7 +225,7 @@ describe('bufferAsyncIterable()', () => {
           /** @type {[number[], number]} */
           const result = [
             rawResult.map(item => item.value),
-            Date.now()
+            Date.now(),
           ];
 
           return result;
@@ -282,7 +282,7 @@ describe('bufferAsyncIterable()', () => {
           /** @type {[number[], number]} */
           const result = [
             rawResult.map(item => item.value),
-            Date.now()
+            Date.now(),
           ];
 
           return result;

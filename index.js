@@ -92,7 +92,7 @@ export function map (input, callback, options) {
           const promiseValue = {
             queuePromise,
             fromSubIterator: true,
-            ...result
+            ...result,
           };
 
           return promiseValue;
