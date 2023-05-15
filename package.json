@@ -87,7 +87,7 @@
     "husky": "^8.0.1",
     "installed-check": "^6.0.1",
     "mocha": "^10.0.0",
-    "npm-run-all2": "^6.0.1",
+    "npm-run-all2": "^6.0.5",
     "sinon": "^14.0.0",
     "sinon-chai": "^3.7.0",
     "type-coverage": "^2.25.3",
