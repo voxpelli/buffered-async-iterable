@@ -104,7 +104,7 @@ describe('bufferAsyncIterable() basic', () => {
     bufferedAsyncIterable[Symbol.asyncIterator].should.be.a('function');
   });
 
-  it('should return an AsyncIterable when provided when chained with itself', () => {
+  it('should return an AsyncIterable when chained with itself', () => {
     const asyncIterable = (async function * () {})();
     const chainedBufferedAsyncIterable = bufferAsyncIterable(
       asyncIterable,
