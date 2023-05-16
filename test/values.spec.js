@@ -475,4 +475,8 @@ describe('bufferAsyncIterable() values', () => {
   });
 
   it('should return the value sent to it');
+
+  it('should be able to return the values in order');
+
+  it('should provide an AbortController in the map callback');
 });
