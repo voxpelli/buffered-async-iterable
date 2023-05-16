@@ -1,8 +1,6 @@
 import chai from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import chaiQuantifiers from 'chai-quantifiers';
-import sinon from 'sinon';
-import sinonChai from 'sinon-chai';
 
 import {
   map as bufferAsyncIterable,
@@ -10,15 +8,10 @@ import {
 
 chai.use(chaiAsPromised);
 chai.use(chaiQuantifiers);
-chai.use(sinonChai);
 
 const should = chai.should();
 
 describe('bufferAsyncIterable() basic', () => {
-  afterEach(() => {
-    sinon.restore();
-  });
-
   it('should throw on falsy asyncIterable argument', () => {
     should.Throw(() => {
       // @ts-ignore
