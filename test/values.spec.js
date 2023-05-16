@@ -426,13 +426,21 @@ describe('bufferAsyncIterable() values', () => {
     it('should end the iterator when called', async () => {
       const iterator = bufferAsyncIterable(baseAsyncIterable, async (item) => item);
 
-      iterator.next().should.eventually.deep.equal({ value: 0 });
-      iterator.return().should.eventually.deep.equal({ done: true, value: undefined });
-      iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
+      await iterator.next().should.eventually.deep.equal({ value: 0 });
+
+      const returnValue = iterator.return();
+      const nextAfterReturn = iterator.next();
+
+      await clock.runAllAsync();
+
+      await returnValue.should.eventually.deep.equal({ done: true, value: undefined });
+      await nextAfterReturn.should.eventually.deep.equal({ done: true, value: undefined });
     });
 
     it('should be called when a loop breaks', async () => {
       const iterator = bufferAsyncIterable(baseAsyncIterable, async (item) => item, { queueSize: 3 });
+      const returnSpy = sinon.spy(iterator, 'return');
+      const throwSpy = sinon.spy(iterator, 'throw');
 
       const promisedResult = (async () => {
         // eslint-disable-next-line no-unreachable-loop
@@ -451,10 +459,15 @@ describe('bufferAsyncIterable() values', () => {
       // TODO: Do we need an await here?
       await iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
       duration.should.equal(2200);
+
+      returnSpy.should.have.been.calledOnceWithExactly();
+      throwSpy.should.not.have.been.called;
     });
 
     it('should be called when a loop throws', async () => {
       const iterator = bufferAsyncIterable(baseAsyncIterable, async (item) => item);
+      const returnSpy = sinon.spy(iterator, 'return');
+      const throwSpy = sinon.spy(iterator, 'throw');
       const errorToThrow = new Error('Yet another error');
 
       const promisedResult = (async () => {
@@ -469,8 +482,53 @@ describe('bufferAsyncIterable() values', () => {
 
       await clock.runAllAsync();
 
+      returnSpy.should.have.been.calledOnceWithExactly();
+      throwSpy.should.not.have.been.called;
+
       await promisedResult.should.eventually.be.rejectedWith(errorToThrow);
       await iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
+    });
+  });
+
+  describe('AsyncInterface throw()', () => {
+    it('should end the iterator when called', async () => {
+      const errorToThrow = new Error('Yet another error');
+
+      const iterator = bufferAsyncIterable(baseAsyncIterable, async (item) => item);
+
+      await iterator.next().should.eventually.deep.equal({ value: 0 });
+      await iterator.throw(errorToThrow).should.eventually.be.rejectedWith(errorToThrow);
+      await iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
+    });
+
+    it('should be called when a loop throws', async () => {
+      const iterator = bufferAsyncIterable(baseAsyncIterable, async (item) => item);
+      const returnSpy = sinon.spy(iterator, 'return');
+      const throwSpy = sinon.spy(iterator, 'throw');
+      const errorToThrow = new Error('Yet another error');
+
+      let caught;
+
+      // Inspired by https://github.com/WebKit/WebKit/blob/1a09d8d95ba6085df4ef44306c4bfc9fc86fdbc7/JSTests/test262/test/language/expressions/yield/star-rhs-iter-thrw-thrw-get-err.js
+      async function * g () {
+        try {
+          yield * iterator;
+        } catch (err) {
+          caught = err;
+          throw err;
+        }
+      }
+
+      const wrappedIterator = g();
+
+      await wrappedIterator.next().should.eventually.deep.equal({ done: false, value: 0 });
+      await wrappedIterator.throw(errorToThrow).should.eventually.be.rejectedWith(errorToThrow);
+      await wrappedIterator.next().should.eventually.deep.equal({ done: true, value: undefined });
+      await iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
+
+      (caught || {}).should.equal(errorToThrow);
+      throwSpy.should.have.been.calledOnceWithExactly(errorToThrow);
+      returnSpy.should.not.have.been.called;
     });
   });
 
