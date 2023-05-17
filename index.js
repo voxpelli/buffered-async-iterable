@@ -5,7 +5,7 @@
 // TODO: Make a proper merge for async iterables by accepting multiple input iterables, see: https://twitter.com/matteocollina/status/1392056092482576385
 
 import { EventLoopBreather } from './lib/event-loop-breather.js';
-import { findLeastMapped } from './lib/find-least-mapped.js';
+import { findLeastUsedTarget } from './lib/find-least-mapped.js';
 import { makeIterableAsync } from './lib/misc.js';
 import { isAsyncIterable, isIterable, isPartOfSet } from './lib/type-checks.js';
 
@@ -45,7 +45,7 @@ export function map (input, callback, options) {
   const queuedPromises = new Set();
 
   /** @type {WeakMap<QueuePromise, AsyncIterator<T>|AsyncIterator<R>>} */
-  const mapPromisesToSourceIterator = new WeakMap();
+  const promisesToSourceIteratorMap = new WeakMap();
 
   const breather = new EventLoopBreather(escapeToEventLoopEvery);
 
@@ -71,10 +71,11 @@ export function map (input, callback, options) {
   const fillQueue = () => {
     if (done) return;
 
-    const iterator = findLeastMapped(
+    // Check which iterator that has the least amount of queued promises right now
+    const iterator = findLeastUsedTarget(
       mainReturnedDone ? subIterators : [...subIterators, asyncIterator],
       queuedPromises,
-      mapPromisesToSourceIterator
+      promisesToSourceIteratorMap
     );
 
     const subIterator = isPartOfSet(iterator, subIterators) && iterator;
@@ -119,7 +120,7 @@ export function map (input, callback, options) {
           return promiseValue;
         });
 
-    mapPromisesToSourceIterator.set(queuePromise, subIterator || asyncIterator);
+    promisesToSourceIteratorMap.set(queuePromise, subIterator || asyncIterator);
     queuedPromises.add(queuePromise);
 
     if (queuedPromises.size < queueSize) {
