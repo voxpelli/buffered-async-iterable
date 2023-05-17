@@ -78,16 +78,16 @@ export function map (input, callback, options) {
       promisesToSourceIteratorMap
     );
 
-    const subIterator = isPartOfSet(iterator, subIterators) && iterator;
+    const currentSubIterator = isPartOfSet(iterator, subIterators) ? iterator : undefined;
 
     // FIXME: Handle rejected promises from upstream! And properly mark this iterator as completed
     /** @type {QueuePromise} */
-    const queuePromise = subIterator
-      ? breather.breathe(subIterator.next())
+    const queuePromise = currentSubIterator
+      ? breather.breathe(currentSubIterator.next())
         // eslint-disable-next-line promise/prefer-await-to-then
         .then(async result => {
           if (result.done) {
-            subIterators.delete(subIterator);
+            subIterators.delete(currentSubIterator);
           }
 
           /** @type {Awaited<QueuePromise>} */
@@ -120,7 +120,7 @@ export function map (input, callback, options) {
           return promiseValue;
         });
 
-    promisesToSourceIteratorMap.set(queuePromise, subIterator || asyncIterator);
+    promisesToSourceIteratorMap.set(queuePromise, currentSubIterator || asyncIterator);
     queuedPromises.add(queuePromise);
 
     if (queuedPromises.size < queueSize) {
