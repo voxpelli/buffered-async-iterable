@@ -5,7 +5,7 @@
 // TODO: Make a proper merge for async iterables by accepting multiple input iterables, see: https://twitter.com/matteocollina/status/1392056092482576385
 
 import { EventLoopBreather } from './lib/event-loop-breather.js';
-import { findLeastUsedTarget } from './lib/find-least-mapped.js';
+import { findLeastTargeted } from './lib/find-least-targeted.js';
 import { makeIterableAsync } from './lib/misc.js';
 import { isAsyncIterable, isIterable, isPartOfSet } from './lib/type-checks.js';
 
@@ -72,7 +72,7 @@ export function map (input, callback, options) {
     if (done) return;
 
     // Check which iterator that has the least amount of queued promises right now
-    const iterator = findLeastUsedTarget(
+    const iterator = findLeastTargeted(
       mainReturnedDone ? subIterators : [...subIterators, asyncIterator],
       queuedPromises,
       promisesToSourceIteratorMap
