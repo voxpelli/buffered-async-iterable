@@ -183,6 +183,7 @@ export function map (input, callback, options) {
     'return': () => markAsEnded(),
     // TODO: Add "throw", see reference in https://tc39.es/ecma262/ ? And https://twitter.com/matteocollina/status/1392056117128306691
     'throw': async (err) => {
+      // FIXME: Should remember the throw? And return a rejected promise always?
       markAsEnded();
       throw err;
     },
