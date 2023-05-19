@@ -28,7 +28,7 @@ export const promisedImmediate = (value) => new Promise(resolve => setImmediate(
  * @param {AsyncIterable<any>} baseAsyncIterable
  * @returns {Promise<LoopResult>}
  */
-export const coreLoop = async (baseAsyncIterable) => {
+const coreLoop = async (baseAsyncIterable) => {
   getAndResetMaxLag();
 
   const loopStarts = Date.now();
