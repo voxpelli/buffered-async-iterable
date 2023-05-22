@@ -8,21 +8,20 @@ import { findLeastTargeted } from './lib/find-least-targeted.js';
 import { makeIterableAsync } from './lib/misc.js';
 import { isAsyncIterable, isIterable, isPartOfSet } from './lib/type-checks.js';
 
-// FIXME: Export using a better more unique name
 /**
  * @template T
  * @template R
  * @param {AsyncIterable<T> | Iterable<T> | T[]} input
  * @param {(item: T) => (Promise<R>|AsyncIterable<R>)} callback
- * @param {{ queueSize?: number|undefined }} [options]
+ * @param {{ bufferSize?: number|undefined }} [options]
  * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]> }}
  */
 export function bufferedAsyncMap (input, callback, options) {
-  /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { queuePromise: QueuePromise, fromSubIterator?: boolean, isSubIterator?: boolean }>} QueuePromise */
+  /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { bufferPromise: BufferPromise, fromSubIterator?: boolean, isSubIterator?: boolean }>} BufferPromise */
 
   const {
     // FIXME: Increase to eg 16? Like in eg https://github.com/mcollina/hwp/blob/b13d1e48f3ed656cd7b90e48b9db721cdac5c922/index.js#LL6C51-L6C53
-    queueSize = 6,
+    bufferSize = 6,
   } = options || {};
 
   /** @type {AsyncIterable<T>} */
@@ -33,7 +32,7 @@ export function bufferedAsyncMap (input, callback, options) {
   if (!input) throw new TypeError('Expected input to be provided');
   if (!isAsyncIterable(asyncIterable)) throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
   if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');
-  if (typeof queueSize !== 'number') throw new TypeError('Expected queueSize to be a number');
+  if (typeof bufferSize !== 'number') throw new TypeError('Expected bufferSize to be a number');
 
   /** @type {AsyncIterator<T, unknown>} */
   const asyncIterator = asyncIterable[Symbol.asyncIterator]();
@@ -41,10 +40,10 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {Set<AsyncIterator<R, unknown>>} */
   const subIterators = new Set();
 
-  /** @type {Set<QueuePromise>} */
-  const queuedPromises = new Set();
+  /** @type {Set<BufferPromise>} */
+  const bufferedPromises = new Set();
 
-  /** @type {WeakMap<QueuePromise, AsyncIterator<T>|AsyncIterator<R>>} */
+  /** @type {WeakMap<BufferPromise, AsyncIterator<T>|AsyncIterator<R>>} */
   const promisesToSourceIteratorMap = new WeakMap();
 
   /** @type {boolean} */
@@ -58,7 +57,7 @@ export function bufferedAsyncMap (input, callback, options) {
     if (!isDone) {
       isDone = true;
       // TODO: Could we use an AbortController to improve this? See eg. https://github.com/mcollina/hwp/pull/10
-      queuedPromises.clear();
+      bufferedPromises.clear();
 
       if (asyncIterator.return) {
         await asyncIterator.return();
@@ -73,15 +72,15 @@ export function bufferedAsyncMap (input, callback, options) {
     // Check which iterator that has the least amount of queued promises right now
     const iterator = findLeastTargeted(
       mainReturnedDone ? subIterators : [...subIterators, asyncIterator],
-      queuedPromises,
+      bufferedPromises,
       promisesToSourceIteratorMap
     );
 
     const currentSubIterator = isPartOfSet(iterator, subIterators) ? iterator : undefined;
 
     // FIXME: Handle rejected promises from upstream! And properly mark this iterator as completed
-    /** @type {QueuePromise} */
-    const queuePromise = currentSubIterator
+    /** @type {BufferPromise} */
+    const bufferPromise = currentSubIterator
       ? currentSubIterator.next()
         // eslint-disable-next-line promise/prefer-await-to-then
         .then(async result => {
@@ -89,9 +88,9 @@ export function bufferedAsyncMap (input, callback, options) {
             subIterators.delete(currentSubIterator);
           }
 
-          /** @type {Awaited<QueuePromise>} */
+          /** @type {Awaited<BufferPromise>} */
           const promiseValue = {
-            queuePromise,
+            bufferPromise,
             fromSubIterator: true,
             ...result,
           };
@@ -103,15 +102,15 @@ export function bufferedAsyncMap (input, callback, options) {
         .then(async result => {
           if (result.done) {
             mainReturnedDone = true;
-            return { queuePromise, ...result };
+            return { bufferPromise, ...result };
           }
 
           // eslint-disable-next-line promise/no-callback-in-promise
           const callbackResult = callback(result.value);
 
-          /** @type {Awaited<QueuePromise>} */
+          /** @type {Awaited<BufferPromise>} */
           const promiseValue = {
-            queuePromise,
+            bufferPromise,
             isSubIterator: isAsyncIterable(callbackResult),
             value: await callbackResult,
           };
@@ -119,30 +118,30 @@ export function bufferedAsyncMap (input, callback, options) {
           return promiseValue;
         });
 
-    promisesToSourceIteratorMap.set(queuePromise, currentSubIterator || asyncIterator);
-    queuedPromises.add(queuePromise);
+    promisesToSourceIteratorMap.set(bufferPromise, currentSubIterator || asyncIterator);
+    bufferedPromises.add(bufferPromise);
 
-    if (queuedPromises.size < queueSize) {
+    if (bufferedPromises.size < bufferSize) {
       fillQueue();
     }
   };
 
   /** @type {AsyncIterator<R>["next"]} */
   const nextValue = async () => {
-    if (queuedPromises.size === 0) return markAsEnded();
+    if (bufferedPromises.size === 0) return markAsEnded();
     if (isDone) return { done: true, value: undefined };
 
     // FIXME: Handle rejected promises! We need to remove it from bufferedPromises
     // Wait for some of the current promises to be finished
     const {
+      bufferPromise,
       done,
       fromSubIterator,
       isSubIterator,
-      queuePromise,
       value,
-    } = await Promise.race(queuedPromises);
+    } = await Promise.race(bufferedPromises);
 
-    queuedPromises.delete(queuePromise);
+    bufferedPromises.delete(bufferPromise);
 
     // We are mandated by the spec to always do this return if the iterator is done
     if (isDone) {
@@ -152,7 +151,7 @@ export function bufferedAsyncMap (input, callback, options) {
         fillQueue();
       }
 
-      return queuedPromises.size === 0
+      return bufferedPromises.size === 0
         ? markAsEnded()
         : nextValue();
     } else if (isSubIterator && isAsyncIterable(value)) {

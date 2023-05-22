@@ -5,7 +5,7 @@ import sinon from 'sinon';
 import sinonChai from 'sinon-chai';
 
 import {
-  map as bufferAsyncIterable,
+  bufferedAsyncMap,
 } from '../index.js';
 
 import {
@@ -18,7 +18,7 @@ chai.use(sinonChai);
 
 chai.should();
 
-describe('bufferAsyncIterable() AsyncInterface throw()', () => {
+describe('bufferedAsyncMap() AsyncInterface throw()', () => {
   const count = 6;
 
   /** @type {AsyncIterable<number>} */
@@ -38,7 +38,7 @@ describe('bufferAsyncIterable() AsyncInterface throw()', () => {
   it('should end the iterator when called', async () => {
     const errorToThrow = new Error('Yet another error');
 
-    const iterator = bufferAsyncIterable(baseAsyncIterable, async (item) => item);
+    const iterator = bufferedAsyncMap(baseAsyncIterable, async (item) => item);
 
     await iterator.next().should.eventually.deep.equal({ value: 0 });
     await iterator.throw(errorToThrow).should.eventually.be.rejectedWith(errorToThrow);
@@ -46,7 +46,7 @@ describe('bufferAsyncIterable() AsyncInterface throw()', () => {
   });
 
   it('should be called when a loop throws', async () => {
-    const iterator = bufferAsyncIterable(baseAsyncIterable, async (item) => item);
+    const iterator = bufferedAsyncMap(baseAsyncIterable, async (item) => item);
     const returnSpy = sinon.spy(iterator, 'return');
     const throwSpy = sinon.spy(iterator, 'throw');
     const errorToThrow = new Error('Yet another error');

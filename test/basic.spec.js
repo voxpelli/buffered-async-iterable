@@ -3,7 +3,7 @@ import chaiAsPromised from 'chai-as-promised';
 import chaiQuantifiers from 'chai-quantifiers';
 
 import {
-  map as bufferAsyncIterable,
+  bufferedAsyncMap,
 } from '../index.js';
 
 chai.use(chaiAsPromised);
@@ -11,28 +11,28 @@ chai.use(chaiQuantifiers);
 
 const should = chai.should();
 
-describe('bufferAsyncIterable() basic', () => {
+describe('bufferedAsyncMap() basic', () => {
   it('should throw on falsy asyncIterable argument', () => {
     should.Throw(() => {
       // @ts-ignore
-      bufferAsyncIterable();
+      bufferedAsyncMap();
     }, TypeError, 'Expected input to be provided');
   });
 
   it('should throw when provided asyncIterable is not an asyncIterable', () => {
     should.Throw(() => {
       // @ts-ignore
-      bufferAsyncIterable(true);
+      bufferedAsyncMap(true);
     }, TypeError, 'Expected asyncIterable to have a Symbol.asyncIterator function');
   });
 
   it('should throw when provided callback is not a function', () => {
     should.Throw(() => {
       const asyncIterable = (async function * () {})();
-      bufferAsyncIterable(
+      bufferedAsyncMap(
         asyncIterable,
         // @ts-ignore
-        { queueSize: true }
+        { bufferSize: true }
       );
     }, TypeError, 'Expected callback to be a function');
   });
@@ -40,18 +40,18 @@ describe('bufferAsyncIterable() basic', () => {
   it('should throw when provided size is not a number', () => {
     should.Throw(() => {
       const asyncIterable = (async function * () {})();
-      bufferAsyncIterable(
+      bufferedAsyncMap(
         asyncIterable,
         async () => {},
         // @ts-ignore
-        { queueSize: true }
+        { bufferSize: true }
       );
-    }, TypeError, 'Expected queueSize to be a number');
+    }, TypeError, 'Expected bufferSize to be a number');
   });
 
   it('should return an AsyncIterable when provided with required arguments', () => {
     const asyncIterable = (async function * () {})();
-    const bufferedAsyncIterable = bufferAsyncIterable(
+    const bufferedAsyncIterable = bufferedAsyncMap(
       asyncIterable,
       async () => {}
     );
@@ -65,10 +65,10 @@ describe('bufferAsyncIterable() basic', () => {
 
   it('should return an AsyncIterable when provided with all arguments', () => {
     const asyncIterable = (async function * () {})();
-    const bufferedAsyncIterable = bufferAsyncIterable(
+    const bufferedAsyncIterable = bufferedAsyncMap(
       asyncIterable,
       async () => {},
-      { queueSize: 10 }
+      { bufferSize: 10 }
     );
 
     should.exist(bufferedAsyncIterable);
@@ -79,7 +79,7 @@ describe('bufferAsyncIterable() basic', () => {
   });
 
   it('should return an AsyncIterable when provided with an array value', () => {
-    const bufferedAsyncIterable = bufferAsyncIterable(
+    const bufferedAsyncIterable = bufferedAsyncMap(
       ['a', 'b', 'c'],
       async () => {}
     );
@@ -92,7 +92,7 @@ describe('bufferAsyncIterable() basic', () => {
   });
 
   it('should return an AsyncIterable when provided with a Set value', () => {
-    const bufferedAsyncIterable = bufferAsyncIterable(
+    const bufferedAsyncIterable = bufferedAsyncMap(
       new Set(['a', 'b', 'c']),
       async () => {}
     );
@@ -106,11 +106,11 @@ describe('bufferAsyncIterable() basic', () => {
 
   it('should return an AsyncIterable when chained with itself', () => {
     const asyncIterable = (async function * () {})();
-    const chainedBufferedAsyncIterable = bufferAsyncIterable(
+    const chainedBufferedAsyncIterable = bufferedAsyncMap(
       asyncIterable,
       async () => {}
     );
-    const bufferedAsyncIterable = bufferAsyncIterable(
+    const bufferedAsyncIterable = bufferedAsyncMap(
       chainedBufferedAsyncIterable,
       async () => {}
     );

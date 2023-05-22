@@ -5,7 +5,7 @@ import sinon from 'sinon';
 import sinonChai from 'sinon-chai';
 
 import {
-  map as bufferAsyncIterable,
+  bufferedAsyncMap,
 } from '../index.js';
 
 import {
@@ -21,7 +21,7 @@ chai.use(sinonChai);
 
 chai.should();
 
-describe('bufferAsyncIterable() values', () => {
+describe('bufferedAsyncMap() values', () => {
   const count = 6;
 
   /** @type {import('sinon').SinonFakeTimers} */
@@ -52,7 +52,7 @@ describe('bufferAsyncIterable() values', () => {
         /** @type {number[]} */
         const rawResult = [];
 
-        for await (const value of bufferAsyncIterable(baseAsyncIterable, async (item) => item)) {
+        for await (const value of bufferedAsyncMap(baseAsyncIterable, async (item) => item)) {
           rawResult.push(value);
         }
 
@@ -73,7 +73,7 @@ describe('bufferAsyncIterable() values', () => {
     it('should return all values from the original AsyncIterable when accessed directly', async () => {
       // Create the promise first, then have it be fully executed using clock.runAllAsync()
       const promisedResult = (async () => {
-        const asyncIterable = bufferAsyncIterable(baseAsyncIterable, async (item) => item);
+        const asyncIterable = bufferedAsyncMap(baseAsyncIterable, async (item) => item);
         const asyncIterator = asyncIterable[Symbol.asyncIterator]();
 
         /** @type {Promise<IteratorResult<number, void>>[]} */
@@ -111,7 +111,7 @@ describe('bufferAsyncIterable() values', () => {
 
       let i = 0;
 
-      for await (const value of bufferAsyncIterable([10, 20, 30], async (item) => {
+      for await (const value of bufferedAsyncMap([10, 20, 30], async (item) => {
         await promisableTimeout(i++ % 2 === 1 ? 2000 : 100);
         return item;
       })) {
@@ -138,7 +138,7 @@ describe('bufferAsyncIterable() values', () => {
       /** @type {string[]} */
       const rawResult = [];
 
-      for await (const value of bufferAsyncIterable(baseAsyncIterable, async function * (item) {
+      for await (const value of bufferedAsyncMap(baseAsyncIterable, async function * (item) {
         yield * yieldValuesOverTimeWithPrefix(2, (i) => i % 2 === 1 ? 2000 : 100, 'prefix-' + item + '-');
       })) {
         rawResult.push(value);
@@ -178,7 +178,7 @@ describe('bufferAsyncIterable() values', () => {
       /** @type {AsyncIterable<string>[]} */
       const rawResult = [];
 
-      for await (const value of bufferAsyncIterable(baseAsyncIterable, async function * (item) {
+      for await (const value of bufferedAsyncMap(baseAsyncIterable, async function * (item) {
         yield yieldValuesOverTimeWithPrefix(2, (i) => i % 2 === 1 ? 2000 : 100, 'prefix-' + item + '-');
       })) {
         rawResult.push(value);
@@ -204,7 +204,7 @@ describe('bufferAsyncIterable() values', () => {
       /** @type {AsyncIterable<string>[]} */
       const rawResult = [];
 
-      for await (const value of bufferAsyncIterable(baseAsyncIterable, async function (item) {
+      for await (const value of bufferedAsyncMap(baseAsyncIterable, async function (item) {
         return yieldValuesOverTimeWithPrefix(2, (i) => i % 2 === 1 ? 2000 : 100, 'prefix-' + item + '-');
       })) {
         rawResult.push(value);
@@ -225,14 +225,14 @@ describe('bufferAsyncIterable() values', () => {
   });
 
   it('should return all values from the original AsyncIterable when chained to itself', async () => {
-    const chainedBufferedAsyncIterable = bufferAsyncIterable(baseAsyncIterable, async (item) => item);
+    const chainedBufferedAsyncIterable = bufferedAsyncMap(baseAsyncIterable, async (item) => item);
 
     // Create the promise first, then have it be fully executed using clock.runAllAsync()
     const promisedResult = (async () => {
       /** @type {number[]} */
       const rawResult = [];
 
-      for await (const value of bufferAsyncIterable(chainedBufferedAsyncIterable, async (item) => item)) {
+      for await (const value of bufferedAsyncMap(chainedBufferedAsyncIterable, async (item) => item)) {
         rawResult.push(value);
       }
 
@@ -266,11 +266,11 @@ describe('bufferAsyncIterable() values', () => {
         /** @type {number[]} */
         const rawResult = [];
 
-        for await (const value of bufferAsyncIterable(baseAsyncIterable, async (item) => {
+        for await (const value of bufferedAsyncMap(baseAsyncIterable, async (item) => {
           const delay = item % 3 === 0 ? 100000 : 100;
           await promisableTimeout(delay);
           return item;
-        }, { queueSize: 3 })) {
+        }, { bufferSize: 3 })) {
           rawResult.push(value);
         }
 
@@ -303,11 +303,11 @@ describe('bufferAsyncIterable() values', () => {
         /** @type {number[]} */
         const rawResult = [];
 
-        for await (const value of bufferAsyncIterable(baseAsyncIterable, async (item) => {
+        for await (const value of bufferedAsyncMap(baseAsyncIterable, async (item) => {
           const delay = item % 3 === 0 ? 100000 : 100;
           await promisableTimeout(delay);
           return item;
-        }, { queueSize: 3 })) {
+        }, { bufferSize: 3 })) {
           rawResult.push(value);
           if (value % 5 === 0) {
             await promisableTimeout(20000);
