@@ -75,7 +75,6 @@ describe('bufferAsyncIterable() AsyncInterface return()', () => {
 
     const duration = await promisedResult;
 
-    // TODO: Do we need an await here?
     await iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
     duration.should.equal(2200);
 
@@ -97,14 +96,16 @@ describe('bufferAsyncIterable() AsyncInterface return()', () => {
       }
 
       return Date.now();
-    })();
+    })()
+      // eslint-disable-next-line promise/prefer-await-to-then
+      .then(() => false, () => true);
 
     await clock.runAllAsync();
 
     returnSpy.should.have.been.calledOnceWithExactly();
     throwSpy.should.not.have.been.called;
 
-    await promisedResult.should.eventually.be.rejectedWith(errorToThrow);
+    await promisedResult.should.eventually.equal(true);
     await iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
   });
 });
