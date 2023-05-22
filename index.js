@@ -4,24 +4,24 @@
 // TODO: Have option to persist order? To not use Promise.race()?
 // TODO: Make a proper merge for async iterables by accepting multiple input iterables, see: https://twitter.com/matteocollina/status/1392056092482576385
 
-import { EventLoopBreather } from './lib/event-loop-breather.js';
 import { findLeastTargeted } from './lib/find-least-targeted.js';
 import { makeIterableAsync } from './lib/misc.js';
 import { isAsyncIterable, isIterable, isPartOfSet } from './lib/type-checks.js';
 
+// FIXME: Export using a better more unique name
 /**
  * @template T
  * @template R
  * @param {AsyncIterable<T> | Iterable<T> | T[]} input
  * @param {(item: T) => (Promise<R>|AsyncIterable<R>)} callback
- * @param {{ queueSize?: number|undefined, escapeToEventLoopEvery?: number|undefined }} [options]
+ * @param {{ queueSize?: number|undefined }} [options]
  * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]> }}
  */
 export function map (input, callback, options) {
   /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { queuePromise: QueuePromise, fromSubIterator?: boolean, isSubIterator?: boolean }>} QueuePromise */
 
   const {
-    escapeToEventLoopEvery,
+    // FIXME: Increase to eg 16? Like in eg https://github.com/mcollina/hwp/blob/b13d1e48f3ed656cd7b90e48b9db721cdac5c922/index.js#LL6C51-L6C53
     queueSize = 6,
   } = options || {};
 
@@ -46,8 +46,6 @@ export function map (input, callback, options) {
 
   /** @type {WeakMap<QueuePromise, AsyncIterator<T>|AsyncIterator<R>>} */
   const promisesToSourceIteratorMap = new WeakMap();
-
-  const breather = new EventLoopBreather(escapeToEventLoopEvery);
 
   /** @type {boolean} */
   let mainReturnedDone;
@@ -83,7 +81,7 @@ export function map (input, callback, options) {
     // FIXME: Handle rejected promises from upstream! And properly mark this iterator as completed
     /** @type {QueuePromise} */
     const queuePromise = currentSubIterator
-      ? breather.breathe(currentSubIterator.next())
+      ? currentSubIterator.next()
         // eslint-disable-next-line promise/prefer-await-to-then
         .then(async result => {
           if (result.done) {
@@ -99,7 +97,7 @@ export function map (input, callback, options) {
 
           return promiseValue;
         })
-      : breather.breathe(asyncIterator.next())
+      : asyncIterator.next()
         // eslint-disable-next-line promise/prefer-await-to-then
         .then(async result => {
           if (result.done) {

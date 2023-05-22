@@ -54,8 +54,6 @@
     "prepare": "husky install"
   },
   "devDependencies": {
-    "@airbnb/node-memwatch": "^2.0.0",
-    "@types/airbnb__node-memwatch": "^2.0.0",
     "@types/chai": "^4.3.5",
     "@types/chai-as-promised": "^7.1.5",
     "@types/chai-quantifiers": "^1.0.1",
