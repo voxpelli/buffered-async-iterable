@@ -51,12 +51,13 @@ export function map (input, callback, options) {
   let mainReturnedDone;
 
   /** @type {boolean} */
-  let done;
+  let isDone;
 
   /** @returns {Promise<IteratorReturnResult<undefined>>} */
   const markAsEnded = async () => {
-    if (!done) {
-      done = true;
+    if (!isDone) {
+      isDone = true;
+      // TODO: Could we use an AbortController to improve this? See eg. https://github.com/mcollina/hwp/pull/10
       queuedPromises.clear();
 
       if (asyncIterator.return) {
@@ -67,7 +68,7 @@ export function map (input, callback, options) {
   };
 
   const fillQueue = () => {
-    if (done) return;
+    if (isDone) return;
 
     // Check which iterator that has the least amount of queued promises right now
     const iterator = findLeastTargeted(
@@ -129,23 +130,24 @@ export function map (input, callback, options) {
   /** @type {AsyncIterator<R>["next"]} */
   const nextValue = async () => {
     if (queuedPromises.size === 0) return markAsEnded();
-    if (done) return { done: true, value: undefined };
+    if (isDone) return { done: true, value: undefined };
 
     // FIXME: Handle rejected promises! We need to remove it from bufferedPromises
     // Wait for some of the current promises to be finished
     const {
+      done,
       fromSubIterator,
       isSubIterator,
       queuePromise,
-      ...result
+      value,
     } = await Promise.race(queuedPromises);
 
     queuedPromises.delete(queuePromise);
 
     // We are mandated by the spec to always do this return if the iterator is done
-    if (done) {
+    if (isDone) {
       return { done: true, value: undefined };
-    } else if (result.done) {
+    } else if (done) {
       if (fromSubIterator || subIterators.size !== 0) {
         fillQueue();
       }
@@ -153,17 +155,15 @@ export function map (input, callback, options) {
       return queuedPromises.size === 0
         ? markAsEnded()
         : nextValue();
-    } else if (isSubIterator && isAsyncIterable(result.value)) {
+    } else if (isSubIterator && isAsyncIterable(value)) {
       // FIXME: Handle possible error here?
-      subIterators.add(result.value[Symbol.asyncIterator]());
+      subIterators.add(value[Symbol.asyncIterator]());
       fillQueue();
       return nextValue();
     } else {
       fillQueue();
 
-      // TODO: Fix the types
-      // @ts-ignore
-      return { value: result.value };
+      return /** @type {{ value: R }} */ ({ value });
     }
   };
 
