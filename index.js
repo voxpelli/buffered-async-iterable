@@ -17,7 +17,7 @@ import { isAsyncIterable, isIterable, isPartOfSet } from './lib/type-checks.js';
  * @param {{ queueSize?: number|undefined }} [options]
  * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]> }}
  */
-export function map (input, callback, options) {
+export function bufferedAsyncMap (input, callback, options) {
   /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { queuePromise: QueuePromise, fromSubIterator?: boolean, isSubIterator?: boolean }>} QueuePromise */
 
   const {
