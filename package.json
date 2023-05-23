@@ -68,7 +68,7 @@
     "eslint-plugin-unicorn": "^47.0.0",
     "husky": "^8.0.3",
     "installed-check": "^7.1.0",
-    "knip": "^2.11.0",
+    "knip": "^2.12.1",
     "mocha": "^10.2.0",
     "npm-run-all2": "^6.0.5",
     "sinon": "^15.1.0",
