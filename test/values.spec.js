@@ -332,6 +332,179 @@ describe('bufferedAsyncMap() values', () => {
     });
   });
 
+  it('should handle rejected value from source', async () => {
+    const rejectionError = new Error('Rejection');
+
+    /** @returns {AsyncIterable<number>} */
+    // eslint-disable-next-line unicorn/consistent-function-scoping
+    async function * rejectedGeneratorValue () {
+      for (let i = 0; i < count; i++) {
+        yield i === 3
+          ? promisableTimeout(200).then(() => { throw rejectionError; })
+          : i;
+        await promisableTimeout(i < 3 ? 2000 : 100);
+      }
+    }
+
+    const customAsyncIterable = rejectedGeneratorValue();
+
+    const callbackSpy = sinon.stub().returnsArg(0);
+
+    /** @type {number[]} */
+    const result = [];
+
+    // Create the promise first, then have it be fully executed using clock.runAllAsync()
+    const promisedResult = (async () => {
+      for await (const value of bufferedAsyncMap(customAsyncIterable, callbackSpy)) {
+        result.push(value);
+      }
+    })()
+      // eslint-disable-next-line promise/prefer-await-to-then
+      .then(
+        () => {
+          throw new Error('Expected a rejection');
+        },
+        err => {
+          err.should.equal(rejectionError);
+        }
+      );
+
+    await clock.runAllAsync();
+    await promisedResult;
+
+    callbackSpy.should.have.callCount(3);
+
+    await customAsyncIterable[Symbol.asyncIterator]().next().should.eventually.deep.equal({
+      done: true,
+      value: undefined,
+    });
+
+    result.should.have.length(3).and.have.members([0, 1, 2]);
+  });
+
+  it.only('should handle rejected value from map callback', async () => {
+    const bufferSize = 5;
+    const rejectionError = new Error('Rejection');
+
+    baseAsyncIterable = yieldValuesOverTime(count * 10, (i) => i % 2 === 1 ? 2000 : 100);
+
+    const callbackSpy = sinon.stub().returnsArg(0).onSecondCall().rejects(rejectionError);
+
+    /** @type {number[]} */
+    const result = [];
+
+    // Create the promise first, then have it be fully executed using clock.runAllAsync()
+    const promisedResult = (async () => {
+      for await (const value of bufferedAsyncMap(baseAsyncIterable, callbackSpy, { bufferSize })) {
+        result.push(value);
+      }
+    })()
+      // eslint-disable-next-line promise/prefer-await-to-then
+      .then(
+        () => {
+          throw new Error('Expected a rejection');
+        },
+        err => {
+          err.should.equal(rejectionError);
+        }
+      );
+
+    await clock.runAllAsync();
+    await promisedResult;
+
+    callbackSpy.should.have.callCount(bufferSize + 1);
+    result.should.be.an('array').with.members([
+      0,
+      2,
+      3,
+      4,
+      5,
+    ]);
+
+    await baseAsyncIterable[Symbol.asyncIterator]().next().should.eventually.deep.equal({
+      done: true,
+      value: undefined,
+    });
+  });
+
+  it.only('should handle rejected value from generator map callback', async () => {
+    const bufferSize = 5;
+    const rejectionError = new Error('Rejection');
+
+    baseAsyncIterable = yieldValuesOverTime(count * 10, (i) => i % 2 === 1 ? 2000 : 100);
+
+    /**
+     * @param {number} baseIndex
+     * @returns {AsyncIterable<string>}
+     */
+    async function * rejectedGeneratorValue (baseIndex) {
+      for (let i = 0; i < 10; i++) {
+        // eslint-disable-next-line unicorn/prefer-ternary
+        if (i === baseIndex + 1) {
+          yield promisableTimeout(2150).then(() => { throw rejectionError; });
+        } else {
+          yield baseIndex + ':' + i;
+        }
+        await promisableTimeout(i ? 100 : 2000);
+      }
+    }
+
+    /** @type {string[]} */
+    const result = [];
+    /** @type {Array<AsyncIterable<string|number>>} */
+    const iterators = [baseAsyncIterable];
+
+    // Create the promise first, then have it be fully executed using clock.runAllAsync()
+    const promisedResult = (async () => {
+      for await (const value of bufferedAsyncMap(baseAsyncIterable, (baseIndex) => {
+        const subIterator = rejectedGeneratorValue(baseIndex);
+        iterators.push(subIterator);
+        return subIterator;
+      }, { bufferSize })) {
+        result.push(value);
+      }
+    })()
+      // eslint-disable-next-line promise/prefer-await-to-then
+      .then(
+        () => {
+          throw new Error('Expected a rejection');
+        },
+        err => {
+          err.should.equal(rejectionError);
+        }
+      );
+
+    await clock.runAllAsync();
+    await promisedResult;
+
+    result.should.be.an('array').with.members([
+      '0:0',
+      '1:0',
+      '1:1',
+      '2:0',
+      '2:1',
+      '2:2',
+      '3:0',
+      '3:1',
+    ]);
+
+    iterators.should.be.of.length(6);
+
+    const iteratorsNext = iterators.map(async iterator =>
+      iterator[Symbol.asyncIterator]()
+        .next()
+        // eslint-disable-next-line promise/prefer-await-to-then
+        .catch(err => ({ err }))
+    );
+
+    await clock.runAllAsync();
+
+    await Promise.all(iteratorsNext).should.eventually.deep.equal(
+      Array.from({ length: 6 })
+        .fill({ done: true, value: undefined })
+    );
+  });
+
   it('should return the value sent to it');
 
   it('should be able to return the values in order');

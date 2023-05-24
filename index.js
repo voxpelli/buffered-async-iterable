@@ -1,3 +1,4 @@
+/* eslint-disable promise/prefer-await-to-then */
 // TODO: Get inspired by Matteos https://github.com/mcollina/hwp/blob/main/index.js, eg AbortController is nice?
 // FIXME: Check this https://twitter.com/matteocollina/status/1392056117128306691
 // FIXME: Read up on https://tc39.es/ecma262/#table-async-iterator-optional and add return() and throw(). return() is called by a "for await" when eg. a "break" or a "throw" happens within it
@@ -17,8 +18,7 @@ import { isAsyncIterable, isIterable, isPartOfSet } from './lib/type-checks.js';
  * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]> }}
  */
 export function bufferedAsyncMap (input, callback, options) {
-  /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { bufferPromise: BufferPromise, fromSubIterator?: boolean, isSubIterator?: boolean }>} BufferPromise */
-
+  /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { bufferPromise: BufferPromise, fromSubIterator?: boolean, isSubIterator?: boolean, err?: unknown }>} BufferPromise */
   const {
     // FIXME: Increase to eg 16? Like in eg https://github.com/mcollina/hwp/blob/b13d1e48f3ed656cd7b90e48b9db721cdac5c922/index.js#LL6C51-L6C53
     bufferSize = 6,
@@ -52,22 +52,32 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {boolean} */
   let isDone;
 
-  /** @returns {Promise<IteratorReturnResult<undefined>>} */
-  const markAsEnded = async () => {
+  /** @type {Error|undefined} */
+  let hasError;
+
+  /**
+   * @param {boolean} [throwAnyError]
+   * @returns {Promise<IteratorReturnResult<undefined>>}
+   */
+  const markAsEnded = async (throwAnyError) => {
     if (!isDone) {
       isDone = true;
       // TODO: Could we use an AbortController to improve this? See eg. https://github.com/mcollina/hwp/pull/10
       bufferedPromises.clear();
 
+      // FIXME: Need to do the same for subiterators
       if (asyncIterator.return) {
         await asyncIterator.return();
+      }
+      if (throwAnyError && hasError) {
+        throw hasError;
       }
     }
     return { done: true, value: undefined };
   };
 
   const fillQueue = () => {
-    if (isDone) return;
+    if (hasError || isDone) return;
 
     // Check which iterator that has the least amount of queued promises right now
     const iterator = findLeastTargeted(
@@ -78,13 +88,16 @@ export function bufferedAsyncMap (input, callback, options) {
 
     const currentSubIterator = isPartOfSet(iterator, subIterators) ? iterator : undefined;
 
+    // FIXME: Ensure that all subIterators are closed on errors
     // FIXME: Handle rejected promises from upstream! And properly mark this iterator as completed
     /** @type {BufferPromise} */
     const bufferPromise = currentSubIterator
       ? currentSubIterator.next()
-        // eslint-disable-next-line promise/prefer-await-to-then
+        .catch(err => ({
+          err: err instanceof Error ? err : new Error('Unknown subiterator error'),
+        }))
         .then(async result => {
-          if (result.done) {
+          if ('err' in result || result.done) {
             subIterators.delete(currentSubIterator);
           }
 
@@ -92,28 +105,55 @@ export function bufferedAsyncMap (input, callback, options) {
           const promiseValue = {
             bufferPromise,
             fromSubIterator: true,
-            ...result,
+            ...(
+              'err' in result
+                ? { done: true, value: undefined, ...result }
+                : result
+            ),
           };
 
           return promiseValue;
         })
       : asyncIterator.next()
-        // eslint-disable-next-line promise/prefer-await-to-then
+        .catch(err => ({
+          err: err instanceof Error ? err : new Error('Unknown iterator error'),
+        }))
         .then(async result => {
-          if (result.done) {
+          if ('err' in result || result.done) {
             mainReturnedDone = true;
-            return { bufferPromise, ...result };
+            return {
+              bufferPromise,
+              ...(
+                'err' in result
+                  ? { done: true, value: undefined, ...result }
+                  : result
+              ),
+            };
           }
 
           // eslint-disable-next-line promise/no-callback-in-promise
           const callbackResult = callback(result.value);
+          const isSubIterator = isAsyncIterable(callbackResult);
 
           /** @type {Awaited<BufferPromise>} */
-          const promiseValue = {
-            bufferPromise,
-            isSubIterator: isAsyncIterable(callbackResult),
-            value: await callbackResult,
-          };
+          let promiseValue;
+
+          try {
+            const value = await callbackResult;
+
+            promiseValue = {
+              bufferPromise,
+              isSubIterator,
+              value,
+            };
+          } catch (err) {
+            promiseValue = {
+              bufferPromise,
+              done: true,
+              err: err instanceof Error ? err : new Error('Unknown callback error'),
+              value: undefined,
+            };
+          }
 
           return promiseValue;
         });
@@ -128,7 +168,7 @@ export function bufferedAsyncMap (input, callback, options) {
 
   /** @type {AsyncIterator<R>["next"]} */
   const nextValue = async () => {
-    if (bufferedPromises.size === 0) return markAsEnded();
+    if (bufferedPromises.size === 0) return markAsEnded(true);
     if (isDone) return { done: true, value: undefined };
 
     // FIXME: Handle rejected promises! We need to remove it from bufferedPromises
@@ -136,6 +176,7 @@ export function bufferedAsyncMap (input, callback, options) {
     const {
       bufferPromise,
       done,
+      err,
       fromSubIterator,
       isSubIterator,
       value,
@@ -146,13 +187,17 @@ export function bufferedAsyncMap (input, callback, options) {
     // We are mandated by the spec to always do this return if the iterator is done
     if (isDone) {
       return { done: true, value: undefined };
-    } else if (done) {
+    } else if (err || done) {
+      if (err && !hasError) {
+        hasError = err instanceof Error ? err : new Error('Unknown error');
+      }
+
       if (fromSubIterator || subIterators.size !== 0) {
         fillQueue();
       }
 
       return bufferedPromises.size === 0
-        ? markAsEnded()
+        ? markAsEnded(true)
         : nextValue();
     } else if (isSubIterator && isAsyncIterable(value)) {
       // FIXME: Handle possible error here?
@@ -181,7 +226,7 @@ export function bufferedAsyncMap (input, callback, options) {
     // TODO: Add "throw", see reference in https://tc39.es/ecma262/ ? And https://twitter.com/matteocollina/status/1392056117128306691
     'throw': async (err) => {
       // FIXME: Should remember the throw? And return a rejected promise always?
-      markAsEnded();
+      await markAsEnded();
       throw err;
     },
 
