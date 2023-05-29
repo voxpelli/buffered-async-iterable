@@ -74,7 +74,7 @@ Iterates and applies the `callback` to up to `bufferSize` items from `input` yie
 
 ## Similar modules
 
-* [`hwp`](https://github.com/mcollina/hwp) – similar module by @mcollina
+* [`hwp`](https://github.com/mcollina/hwp) – similar module by [@mcollina](https://github.com/mcollina)
 
 <!-- ## See also
 
