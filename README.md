@@ -1,4 +1,11 @@
-# buffered-async-iterable
+<div align="center">
+  <img
+    src="buffered-async-iterable.svg"
+    width="650"
+    height="auto"
+  />
+</div>
+
 
 Buffered processing of async iterables / generators in parallel to achieve comparable performance to `Promise.all()`
 
@@ -9,7 +16,7 @@ Buffered processing of async iterables / generators in parallel to achieve compa
 [![js-semistandard-style](https://img.shields.io/badge/code%20style-semistandard-brightgreen.svg)](https://github.com/voxpelli/eslint-config)
 [![Follow @voxpelli@mastodon.social](https://img.shields.io/mastodon/follow/109247025527949675?domain=https%3A%2F%2Fmastodon.social&style=social)](https://mastodon.social/@voxpelli)
 
-**WORK IN PROGRESS – early unpolished prerelease**
+**WORK IN PROGRESS – early prerelease**
 
 ## Usage
 
