@@ -359,7 +359,6 @@ describe('bufferedAsyncMap() values', () => {
     const rejectionError = new Error('Rejection');
 
     /** @returns {AsyncIterable<number>} */
-    // eslint-disable-next-line unicorn/consistent-function-scoping
     async function * rejectedGeneratorValue () {
       for (let i = 0; i < count; i++) {
         yield i === 3

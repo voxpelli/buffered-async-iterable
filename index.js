@@ -231,7 +231,6 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]> }} */
   const resultAsyncIterableIterator = {
     async next () {
-      // eslint-disable-next-line promise/prefer-await-to-then
       currentStep = currentStep ? currentStep.then(() => nextValue()) : nextValue();
       return currentStep;
     },
