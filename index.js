@@ -1,11 +1,10 @@
 /* eslint-disable promise/prefer-await-to-then */
+
 // TODO: Get inspired by Matteos https://github.com/mcollina/hwp/blob/main/index.js, eg AbortController is nice?
-// FIXME: Check this https://twitter.com/matteocollina/status/1392056117128306691
-// FIXME: Read up on https://tc39.es/ecma262/#table-async-iterator-optional and add return() and throw(). return() is called by a "for await" when eg. a "break" or a "throw" happens within it
 // TODO: Check docs here https://tc39.es/ecma262/#sec-operations-on-iterator-objects
 // TODO: Look into https://tc39.es/ecma262/#sec-iteratorclose / https://tc39.es/ecma262/#sec-asynciteratorclose
 // TODO: See "iteratorKind" in https://tc39.es/ecma262/#sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset – see how it loops and validates the returned values
-// TODO: THERE*S ACTUALLY A "throw" method MENTION IN https://tc39.es/ecma262/#sec-generator-function-definitions-runtime-semantics-evaluation: "NOTE: Exceptions from the inner iterator throw method are propagated. Normal completions from an inner throw method are processed similarly to an inner next."
+// TODO: THERE'S ACTUALLY A "throw" method MENTION IN https://tc39.es/ecma262/#sec-generator-function-definitions-runtime-semantics-evaluation: "NOTE: Exceptions from the inner iterator throw method are propagated. Normal completions from an inner throw method are processed similarly to an inner next." THOUGH NOT SURE HOW TO TRIGGER IT IN PRACTICE, SEE yield.spec.js
 // TODO: Have option to persist order? To not use Promise.race()?
 // TODO: Make a proper merge for async iterables by accepting multiple input iterables, see: https://twitter.com/matteocollina/status/1392056092482576385
 
@@ -24,7 +23,6 @@ import { isAsyncIterable, isIterable, isPartOfSet } from './lib/type-checks.js';
 export function bufferedAsyncMap (input, callback, options) {
   /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { bufferPromise: BufferPromise, fromSubIterator?: boolean, isSubIterator?: boolean, err?: unknown }>} BufferPromise */
   const {
-    // FIXME: Increase to eg 16? Like in eg https://github.com/mcollina/hwp/blob/b13d1e48f3ed656cd7b90e48b9db721cdac5c922/index.js#LL6C51-L6C53
     bufferSize = 6,
   } = options || {};
 
@@ -101,16 +99,16 @@ export function bufferedAsyncMap (input, callback, options) {
 
     const currentSubIterator = isPartOfSet(iterator, subIterators) ? iterator : undefined;
 
-    // FIXME: Ensure that all subIterators are closed on errors
-    // FIXME: Handle rejected promises from upstream! And properly mark this iterator as completed
     /** @type {BufferPromise} */
     const bufferPromise = currentSubIterator
-      ? currentSubIterator.next()
+      ? Promise.resolve(currentSubIterator.next())
         .catch(err => ({
           err: err instanceof Error ? err : new Error('Unknown subiterator error'),
         }))
         .then(async result => {
-          // FIXME: If "result" is not an object, throw a type error: https://tc39.es/ecma262/#sec-iteratornext
+          if (typeof result !== 'object') {
+            throw new TypeError('Expected an object value');
+          }
           if ('err' in result || result.done) {
             subIterators.delete(currentSubIterator);
           }
@@ -128,12 +126,14 @@ export function bufferedAsyncMap (input, callback, options) {
 
           return promiseValue;
         })
-      : asyncIterator.next()
+      : Promise.resolve(asyncIterator.next())
         .catch(err => ({
           err: err instanceof Error ? err : new Error('Unknown iterator error'),
         }))
         .then(async result => {
-          // FIXME: If "result" is not an object, throw a type error: https://tc39.es/ecma262/#sec-iteratornext
+          if (typeof result !== 'object') {
+            throw new TypeError('Expected an object value');
+          }
           if ('err' in result || result.done) {
             mainReturnedDone = true;
             return {
@@ -186,7 +186,6 @@ export function bufferedAsyncMap (input, callback, options) {
     if (bufferedPromises.size === 0) return markAsEnded(true);
     if (isDone) return { done: true, value: undefined };
 
-    // FIXME: Handle rejected promises! We need to remove it from bufferedPromises
     // Wait for some of the current promises to be finished
     const {
       bufferPromise,
@@ -215,7 +214,7 @@ export function bufferedAsyncMap (input, callback, options) {
         ? markAsEnded(true)
         : nextValue();
     } else if (isSubIterator && isAsyncIterable(value)) {
-      // FIXME: Handle possible error here?
+      // TODO: Handle possible error here? Or too obscure?
       subIterators.add(value[Symbol.asyncIterator]());
       fillQueue();
       return nextValue();
@@ -240,7 +239,7 @@ export function bufferedAsyncMap (input, callback, options) {
     'return': () => markAsEnded(),
     // TODO: Add "throw", see reference in https://tc39.es/ecma262/ ? And https://twitter.com/matteocollina/status/1392056117128306691
     'throw': async (err) => {
-      // FIXME: Should remember the throw? And return a rejected promise always?
+      // TODO: Should remember the throw? And return a rejected promise always?
       await markAsEnded();
       throw err;
     },

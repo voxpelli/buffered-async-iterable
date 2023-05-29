@@ -21,6 +21,29 @@ chai.use(sinonChai);
 
 chai.should();
 
+function stubAsyncIterator () {
+  const next = sinon.stub();
+  const returnStub = sinon.stub();
+  const throwStub = sinon.stub();
+
+  /** @satisfies {AsyncIterator<*>} */
+  const asyncIterator = {
+    next,
+    'return': returnStub,
+    'throw': throwStub,
+  };
+
+  /** @type {AsyncIterable<*>} */
+  const asyncIterable = {
+    [Symbol.asyncIterator]: () => asyncIterator,
+  };
+
+  return {
+    asyncIterable,
+    asyncIterator,
+  };
+}
+
 describe('bufferedAsyncMap() values', () => {
   const count = 6;
 
@@ -507,9 +530,77 @@ describe('bufferedAsyncMap() values', () => {
     );
   });
 
-  it('should return the value sent to it');
+  it('should throw TypeError on non-object value from AsyncIterator interface', async () => {
+    const {
+      asyncIterable,
+      asyncIterator,
+    } = stubAsyncIterator();
 
-  it('should be able to return the values in order');
+    asyncIterator.next.returns('wow');
 
-  it('should provide an AbortController in the map callback');
+    // Create the promise first, then have it be fully executed using clock.runAllAsync()
+    const promisedResult = (async () => {
+      /** @type {string[]} */
+      const result = [];
+
+      for await (const value of bufferedAsyncMap(asyncIterable, async item => item)) {
+        result.push(value);
+      }
+
+      return result;
+    })()
+      // eslint-disable-next-line promise/prefer-await-to-then
+      .then(
+        () => {
+          throw new Error('Expected a rejection');
+        },
+        err => {
+          if (err instanceof TypeError) {
+            err.message.should.equal('Expected an object value');
+          } else {
+            throw new TypeError('Expected a TypeError');
+          }
+        }
+      );
+
+    await clock.runAllAsync();
+    await promisedResult;
+  });
+
+  it('should throw TypeError on non-object value from AsyncIterator interface on subIterator', async () => {
+    const {
+      asyncIterable,
+      asyncIterator,
+    } = stubAsyncIterator();
+
+    asyncIterator.next.returns('wow');
+
+    // Create the promise first, then have it be fully executed using clock.runAllAsync()
+    const promisedResult = (async () => {
+      /** @type {string[]} */
+      const result = [];
+
+      for await (const value of bufferedAsyncMap(baseAsyncIterable, () => asyncIterable)) {
+        result.push(value);
+      }
+
+      return result;
+    })()
+      // eslint-disable-next-line promise/prefer-await-to-then
+      .then(
+        () => {
+          throw new Error('Expected a rejection');
+        },
+        err => {
+          if (err instanceof TypeError) {
+            err.message.should.equal('Expected an object value');
+          } else {
+            throw new TypeError('Expected a TypeError');
+          }
+        }
+      );
+
+    await clock.runAllAsync();
+    await promisedResult;
+  });
 });
