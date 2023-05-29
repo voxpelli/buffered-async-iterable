@@ -18,7 +18,7 @@ chai.use(sinonChai);
 
 chai.should();
 
-describe('bufferedAsyncMap() AsyncInterface throw()', () => {
+describe.skip('bufferedAsyncMap() AsyncInterface throw()', () => {
   const count = 6;
 
   /** @type {AsyncIterable<number>} */

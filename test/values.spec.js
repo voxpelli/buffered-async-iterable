@@ -382,7 +382,7 @@ describe('bufferedAsyncMap() values', () => {
     result.should.have.length(3).and.have.members([0, 1, 2]);
   });
 
-  it.only('should handle rejected value from map callback', async () => {
+  it('should handle rejected value from map callback', async () => {
     const bufferSize = 5;
     const rejectionError = new Error('Rejection');
 
@@ -427,7 +427,7 @@ describe('bufferedAsyncMap() values', () => {
     });
   });
 
-  it.only('should handle rejected value from generator map callback', async () => {
+  it('should handle rejected value from generator map callback', async () => {
     const bufferSize = 5;
     const rejectionError = new Error('Rejection');
 
@@ -489,6 +489,8 @@ describe('bufferedAsyncMap() values', () => {
     ]);
 
     iterators.should.be.of.length(6);
+
+    // Ensure all iterators has been completed
 
     const iteratorsNext = iterators.map(async iterator =>
       iterator[Symbol.asyncIterator]()

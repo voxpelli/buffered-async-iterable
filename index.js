@@ -2,6 +2,10 @@
 // TODO: Get inspired by Matteos https://github.com/mcollina/hwp/blob/main/index.js, eg AbortController is nice?
 // FIXME: Check this https://twitter.com/matteocollina/status/1392056117128306691
 // FIXME: Read up on https://tc39.es/ecma262/#table-async-iterator-optional and add return() and throw(). return() is called by a "for await" when eg. a "break" or a "throw" happens within it
+// TODO: Check docs here https://tc39.es/ecma262/#sec-operations-on-iterator-objects
+// TODO: Look into https://tc39.es/ecma262/#sec-iteratorclose / https://tc39.es/ecma262/#sec-asynciteratorclose
+// TODO: See "iteratorKind" in https://tc39.es/ecma262/#sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset – see how it loops and validates the returned values
+// TODO: THERE*S ACTUALLY A "throw" method MENTION IN https://tc39.es/ecma262/#sec-generator-function-definitions-runtime-semantics-evaluation: "NOTE: Exceptions from the inner iterator throw method are propagated. Normal completions from an inner throw method are processed similarly to an inner next."
 // TODO: Have option to persist order? To not use Promise.race()?
 // TODO: Make a proper merge for async iterables by accepting multiple input iterables, see: https://twitter.com/matteocollina/status/1392056092482576385
 
@@ -62,17 +66,26 @@ export function bufferedAsyncMap (input, callback, options) {
   const markAsEnded = async (throwAnyError) => {
     if (!isDone) {
       isDone = true;
+
+      // TODO: Errors from here, how to handle? allSettled() ensures they will be caught at least
+      await Promise.allSettled(
+        [
+          // Ensure the main iterators are completed
+          ...(mainReturnedDone ? [] : [asyncIterator]),
+          ...subIterators,
+        ]
+          .map(item => item.return && item.return())
+      );
+
       // TODO: Could we use an AbortController to improve this? See eg. https://github.com/mcollina/hwp/pull/10
       bufferedPromises.clear();
+      subIterators.clear();
 
-      // FIXME: Need to do the same for subiterators
-      if (asyncIterator.return) {
-        await asyncIterator.return();
-      }
       if (throwAnyError && hasError) {
         throw hasError;
       }
     }
+
     return { done: true, value: undefined };
   };
 
@@ -97,6 +110,7 @@ export function bufferedAsyncMap (input, callback, options) {
           err: err instanceof Error ? err : new Error('Unknown subiterator error'),
         }))
         .then(async result => {
+          // FIXME: If "result" is not an object, throw a type error: https://tc39.es/ecma262/#sec-iteratornext
           if ('err' in result || result.done) {
             subIterators.delete(currentSubIterator);
           }
@@ -119,6 +133,7 @@ export function bufferedAsyncMap (input, callback, options) {
           err: err instanceof Error ? err : new Error('Unknown iterator error'),
         }))
         .then(async result => {
+          // FIXME: If "result" is not an object, throw a type error: https://tc39.es/ecma262/#sec-iteratornext
           if ('err' in result || result.done) {
             mainReturnedDone = true;
             return {
