@@ -8,6 +8,10 @@ on:
   schedule:
     - cron: '17 16 * * 2'
 
+permissions:
+  actions: read
+  security-events: write
+
 jobs:
   analyze:
     uses: voxpelli/ghatemplates/.github/workflows/codeql-analysis.yml@main
