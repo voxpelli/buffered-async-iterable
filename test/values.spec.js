@@ -602,4 +602,25 @@ describe('bufferedAsyncMap() values', () => {
     await clock.runAllAsync();
     await promisedResult;
   });
+
+  it('should give back pressure', async () => {
+    baseAsyncIterable = yieldValuesOverTime(100, (i) => i % 2 === 1 ? 2000 : 100);
+    const baseAsyncIterator = baseAsyncIterable[Symbol.asyncIterator]();
+
+    const nextSpy = sinon.spy(baseAsyncIterator, 'next');
+
+    const asyncIterator = bufferedAsyncMap(
+      baseAsyncIterable,
+      async (item) => item,
+      { bufferSize: 10 }
+    );
+
+    await clock.runAllAsync();
+    nextSpy.should.have.callCount(10);
+
+    await asyncIterator.next().should.eventually.be.an('object').with.property('value').that.is.a('number');
+
+    await clock.runAllAsync();
+    nextSpy.should.have.callCount(11);
+  });
 });
