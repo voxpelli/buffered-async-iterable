@@ -40,11 +40,11 @@
     "check": "run-s clean && run-p check:*",
     "clean:declarations": "rm -rf $(find . -maxdepth 2 -type f -name '*.d.ts*')",
     "clean": "run-p clean:*",
+    "prepare": "husky install",
     "prepublishOnly": "run-s build",
     "test:mocha": "c8 --reporter=lcov --reporter text mocha 'test/**/*.spec.js'",
     "test-ci": "run-s test:*",
-    "test": "run-s check test:*",
-    "prepare": "husky install"
+    "test": "run-s check test:*"
   },
   "devDependencies": {
     "@types/chai": "^4.3.5",
