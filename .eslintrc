@@ -1,7 +1,4 @@
 {
-  "extends": "@voxpelli",
-  "root": true,
-  "rules": {
-    "func-style": ["warn", "declaration", { "allowArrowFunctions": true }]
-  }
+  "extends": "@voxpelli/eslint-config/esm",
+  "root": true
 }
