@@ -47,7 +47,7 @@
     "test": "run-s check test:*"
   },
   "devDependencies": {
-    "@types/chai": "^4.3.12",
+    "@types/chai": "^4.3.14",
     "@types/chai-as-promised": "^7.1.8",
     "@types/chai-quantifiers": "^1.0.4",
     "@types/mocha": "^10.0.6",
