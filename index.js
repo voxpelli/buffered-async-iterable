@@ -17,13 +17,14 @@ import { isAsyncIterable, isIterable, isPartOfSet } from './lib/type-checks.js';
  * @template R
  * @param {AsyncIterable<T> | Iterable<T> | T[]} input
  * @param {(item: T) => (Promise<R>|AsyncIterable<R>)} callback
- * @param {{ bufferSize?: number|undefined }} [options]
+ * @param {{ bufferSize?: number|undefined, ordered?: boolean|undefined }} [options]
  * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]> }}
  */
 export function bufferedAsyncMap (input, callback, options) {
   /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { bufferPromise: BufferPromise, fromSubIterator?: boolean, isSubIterator?: boolean, err?: unknown }>} BufferPromise */
   const {
     bufferSize = 6,
+    ordered = false,
   } = options || {};
 
   /** @type {AsyncIterable<T>} */
@@ -42,8 +43,8 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {Set<AsyncIterator<R, unknown>>} */
   const subIterators = new Set();
 
-  /** @type {Set<BufferPromise>} */
-  const bufferedPromises = new Set();
+  /** @type {BufferPromise[]} */
+  const bufferedPromises = [];
 
   /** @type {WeakMap<BufferPromise, AsyncIterator<T>|AsyncIterator<R>>} */
   const promisesToSourceIteratorMap = new WeakMap();
@@ -76,7 +77,7 @@ export function bufferedAsyncMap (input, callback, options) {
       );
 
       // TODO: Could we use an AbortController to improve this? See eg. https://github.com/mcollina/hwp/pull/10
-      bufferedPromises.clear();
+      bufferedPromises.splice(0, bufferedPromises.length);
       subIterators.clear();
 
       if (throwAnyError && hasError) {
@@ -174,29 +175,32 @@ export function bufferedAsyncMap (input, callback, options) {
         });
 
     promisesToSourceIteratorMap.set(bufferPromise, currentSubIterator || asyncIterator);
-    bufferedPromises.add(bufferPromise);
+    bufferedPromises.push(bufferPromise);
 
-    if (bufferedPromises.size < bufferSize) {
+    if (bufferedPromises.length < bufferSize) {
       fillQueue();
     }
   };
 
   /** @type {AsyncIterator<R>["next"]} */
   const nextValue = async () => {
-    if (bufferedPromises.size === 0) return markAsEnded(true);
+    const nextBufferedPromise = bufferedPromises[0];
+
+    if (!nextBufferedPromise) return markAsEnded(true);
     if (isDone) return { done: true, value: undefined };
+
+    /** @type {Awaited<BufferPromise>} */
+    const resolvedPromise = await (ordered ? nextBufferedPromise : Promise.race(bufferedPromises));
+    bufferedPromises.splice(bufferedPromises.indexOf(resolvedPromise.bufferPromise), 1);
 
     // Wait for some of the current promises to be finished
     const {
-      bufferPromise,
       done,
       err,
       fromSubIterator,
       isSubIterator,
       value,
-    } = await Promise.race(bufferedPromises);
-
-    bufferedPromises.delete(bufferPromise);
+    } = resolvedPromise;
 
     // We are mandated by the spec to always do this return if the iterator is done
     if (isDone) {
@@ -210,10 +214,13 @@ export function bufferedAsyncMap (input, callback, options) {
         fillQueue();
       }
 
-      return bufferedPromises.size === 0
+      return bufferedPromises.length === 0
         ? markAsEnded(true)
         : nextValue();
     } else if (isSubIterator && isAsyncIterable(value)) {
+      if (ordered) {
+        throw new Error('Sub iterators not yet supported in ordered iterations');
+      }
       // TODO: Handle possible error here? Or too obscure?
       subIterators.add(value[Symbol.asyncIterator]());
       fillQueue();

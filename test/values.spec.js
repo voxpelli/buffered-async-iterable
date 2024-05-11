@@ -69,7 +69,7 @@ describe('bufferedAsyncMap() values', () => {
   });
 
   describe('main', () => {
-    it('should return all values from the original AsyncIterable when looped over ', async () => {
+    it('should return all values from the original AsyncIterable when looped over', async () => {
       // Create the promise first, then have it be fully executed using clock.runAllAsync()
       const promisedResult = (async () => {
         /** @type {number[]} */
@@ -622,5 +622,106 @@ describe('bufferedAsyncMap() values', () => {
 
     await clock.runAllAsync();
     nextSpy.should.have.callCount(11);
+  });
+
+  describe('order', () => {
+    it('ensure out of order as standard', async () => {
+      const asyncIterable = yieldValuesOverTime(10, i => i % 3 === 0 ? 2000 : 1);
+
+      // Create the promise first, then have it be fully executed using clock.runAllAsync()
+      const promisedResult = (async () => {
+        /** @type {number[]} */
+        const rawResult = [];
+
+        for await (const value of bufferedAsyncMap(asyncIterable, async (item) => {
+          await promisableTimeout(item % 2 === 0 ? 2000 : 1);
+          return item;
+        }, { bufferSize: 3 })) {
+          rawResult.push(value);
+        }
+
+        /** @type {[number[], number]} */
+        const result = [rawResult, Date.now()];
+
+        return result;
+      })();
+
+      await clock.runAllAsync();
+
+      const [result, duration] = await promisedResult;
+
+      result.should.deep.equal([0, 1, 3, 2, 5, 4, 6, 7, 9, 8]);
+      duration.should.equal(8006);
+    });
+
+    it('ensure in order when requested', async () => {
+      const asyncIterable = yieldValuesOverTime(10, i => i % 3 === 0 ? 2000 : 1);
+
+      // Create the promise first, then have it be fully executed using clock.runAllAsync()
+      const promisedResult = (async () => {
+        /** @type {number[]} */
+        const rawResult = [];
+
+        for await (const value of bufferedAsyncMap(asyncIterable, async (item) => {
+          await promisableTimeout(item % 2 === 0 ? 2000 : 1);
+          return item;
+        }, { bufferSize: 3, ordered: true })) {
+          rawResult.push(value);
+        }
+
+        /** @type {[number[], number]} */
+        const result = [rawResult, Date.now()];
+
+        return result;
+      })();
+
+      await clock.runAllAsync();
+
+      const [result, duration] = await promisedResult;
+
+      result.should.deep.equal([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+      duration.should.equal(10004);
+    });
+
+    // TODO: Make a test that tests an async callback without having a nested asyncgenerator as well
+    it('should handle chained async generator values from the original AsyncIterable when looped over', async () => {
+      // Create the promise first, then have it be fully executed using clock.runAllAsync()
+      (async () => {
+        /** @type {string[]} */
+        const rawResult = [];
+
+        for await (const value of bufferedAsyncMap(baseAsyncIterable, async function * (item) {
+          yield * yieldValuesOverTimeWithPrefix(2, (i) => i % 2 === 1 ? 2000 : 100, 'prefix-' + item + '-');
+        }, { ordered: true })) {
+          rawResult.push(value);
+        }
+
+        /** @type {[string[], number]} */
+        const result = [rawResult, Date.now()];
+
+        return result;
+      })().should.be.rejectedWith('Sub iterators not yet supported in ordered iterations');
+
+      await clock.runAllAsync();
+
+      // const [result, duration] = await promisedResult;
+
+      // result.should.be.an('array').of.length(12).that.equals([
+      //   'prefix-0-0',
+      //   'prefix-0-1',
+      //   'prefix-1-0',
+      //   'prefix-1-1',
+      //   'prefix-2-0',
+      //   'prefix-2-1',
+      //   'prefix-3-0',
+      //   'prefix-3-1',
+      //   'prefix-4-0',
+      //   'prefix-4-1',
+      //   'prefix-5-0',
+      //   'prefix-5-1',
+      // ]);
+
+      // duration.should.equal(6400);
+    });
   });
 });
