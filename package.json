@@ -47,7 +47,7 @@
     "test": "run-s check test:*"
   },
   "devDependencies": {
-    "@types/chai": "^4.3.12",
+    "@types/chai": "^4.3.16",
     "@types/chai-as-promised": "^7.1.8",
     "@types/chai-quantifiers": "^1.0.4",
     "@types/mocha": "^10.0.6",
@@ -73,7 +73,7 @@
     "husky": "^9.0.11",
     "installed-check": "^8.0.1",
     "knip": "^5.1.1",
-    "mocha": "^10.3.0",
+    "mocha": "^10.4.0",
     "npm-run-all2": "^6.1.2",
     "sinon": "^17.0.1",
     "sinon-chai": "^3.7.0",
