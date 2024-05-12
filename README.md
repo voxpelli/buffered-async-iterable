@@ -97,7 +97,7 @@ Merges all given (async) iterables in parallel, returning the values as they res
 
 #### Arguments
 
-* `input` – either an async iterable, an ordinare iterable or an array
+* `input` – an array of async iterables, ordinare iterables and/or arrays
 
 #### Options
 
