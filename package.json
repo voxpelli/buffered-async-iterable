@@ -1,6 +1,6 @@
 {
   "name": "buffered-async-iterable",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "description": "Creates a prefetched async iterable",
   "homepage": "http://github.com/voxpelli/buffered-async-iterable",
   "repository": {
