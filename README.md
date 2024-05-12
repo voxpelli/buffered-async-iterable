@@ -7,7 +7,7 @@
 </div>
 
 
-Buffered processing of async iterables / generators in parallel to achieve comparable performance to `Promise.all()`
+Buffered parallel processing of async iterables / generators.
 
 [![npm version](https://img.shields.io/npm/v/buffered-async-iterable.svg?style=flat)](https://www.npmjs.com/package/buffered-async-iterable)
 [![npm downloads](https://img.shields.io/npm/dm/buffered-async-iterable.svg?style=flat)](https://www.npmjs.com/package/buffered-async-iterable)
@@ -16,7 +16,6 @@ Buffered processing of async iterables / generators in parallel to achieve compa
 [![js-semistandard-style](https://img.shields.io/badge/code%20style-semistandard-brightgreen.svg)](https://github.com/voxpelli/eslint-config)
 [![Follow @voxpelli@mastodon.social](https://img.shields.io/mastodon/follow/109247025527949675?domain=https%3A%2F%2Fmastodon.social&style=social)](https://mastodon.social/@voxpelli)
 
-**WORK IN PROGRESS – early prerelease**
 
 ## Usage
 
@@ -80,6 +79,7 @@ Iterates and applies the `callback` to up to `bufferSize` items from `input` yie
 #### Options
 
 * `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultanoeus items that processed at once in the buffer.
+* `ordered` – _optional_ – defaults to `false`, when `true` the result will be returned in order instead of unordered
 
 ## Similar modules
 

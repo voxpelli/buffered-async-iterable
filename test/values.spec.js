@@ -10,6 +10,7 @@ import {
 
 import {
   isAsyncGenerator,
+  nestedYieldValuesOverTime,
   promisableTimeout,
   yieldValuesOverTime,
   yieldValuesOverTimeWithPrefix,
@@ -44,6 +45,130 @@ function stubAsyncIterator () {
   };
 }
 
+/**
+ * @param {number} item
+ * @returns {AsyncGenerator<string>}
+ */
+async function * nestedBufferedAsyncMapCallback (item) {
+  yield * nestedYieldValuesOverTime(3, (i) => i % 2 === 1 ? 2000 : 100, async function * (i) {
+    yield * yieldValuesOverTimeWithPrefix(3, (i) => i % 2 === 1 ? 2000 : 100, 'prefix-' + item + '-' + i + '-');
+  });
+  yield * nestedYieldValuesOverTime(3, (i) => i % 2 === 1 ? 2000 : 100, async function * (i) {
+    yield * yieldValuesOverTimeWithPrefix(3, (i) => i % 2 === 1 ? 2000 : 100, '2-prefix-' + item + '-' + i + '-');
+  });
+}
+
+const nestedBufferedAsyncMapOrderedResult = () => /** @type {const} */ ([
+  'prefix-0-0-0',
+  'prefix-0-0-1',
+  'prefix-0-0-2',
+  'prefix-0-1-0',
+  'prefix-0-1-1',
+  'prefix-0-1-2',
+  'prefix-0-2-0',
+  'prefix-0-2-1',
+  'prefix-0-2-2',
+  '2-prefix-0-0-0',
+  '2-prefix-0-0-1',
+  '2-prefix-0-0-2',
+  '2-prefix-0-1-0',
+  '2-prefix-0-1-1',
+  '2-prefix-0-1-2',
+  '2-prefix-0-2-0',
+  '2-prefix-0-2-1',
+  '2-prefix-0-2-2',
+  'prefix-1-0-0',
+  'prefix-1-0-1',
+  'prefix-1-0-2',
+  'prefix-1-1-0',
+  'prefix-1-1-1',
+  'prefix-1-1-2',
+  'prefix-1-2-0',
+  'prefix-1-2-1',
+  'prefix-1-2-2',
+  '2-prefix-1-0-0',
+  '2-prefix-1-0-1',
+  '2-prefix-1-0-2',
+  '2-prefix-1-1-0',
+  '2-prefix-1-1-1',
+  '2-prefix-1-1-2',
+  '2-prefix-1-2-0',
+  '2-prefix-1-2-1',
+  '2-prefix-1-2-2',
+  'prefix-2-0-0',
+  'prefix-2-0-1',
+  'prefix-2-0-2',
+  'prefix-2-1-0',
+  'prefix-2-1-1',
+  'prefix-2-1-2',
+  'prefix-2-2-0',
+  'prefix-2-2-1',
+  'prefix-2-2-2',
+  '2-prefix-2-0-0',
+  '2-prefix-2-0-1',
+  '2-prefix-2-0-2',
+  '2-prefix-2-1-0',
+  '2-prefix-2-1-1',
+  '2-prefix-2-1-2',
+  '2-prefix-2-2-0',
+  '2-prefix-2-2-1',
+  '2-prefix-2-2-2',
+  'prefix-3-0-0',
+  'prefix-3-0-1',
+  'prefix-3-0-2',
+  'prefix-3-1-0',
+  'prefix-3-1-1',
+  'prefix-3-1-2',
+  'prefix-3-2-0',
+  'prefix-3-2-1',
+  'prefix-3-2-2',
+  '2-prefix-3-0-0',
+  '2-prefix-3-0-1',
+  '2-prefix-3-0-2',
+  '2-prefix-3-1-0',
+  '2-prefix-3-1-1',
+  '2-prefix-3-1-2',
+  '2-prefix-3-2-0',
+  '2-prefix-3-2-1',
+  '2-prefix-3-2-2',
+  'prefix-4-0-0',
+  'prefix-4-0-1',
+  'prefix-4-0-2',
+  'prefix-4-1-0',
+  'prefix-4-1-1',
+  'prefix-4-1-2',
+  'prefix-4-2-0',
+  'prefix-4-2-1',
+  'prefix-4-2-2',
+  '2-prefix-4-0-0',
+  '2-prefix-4-0-1',
+  '2-prefix-4-0-2',
+  '2-prefix-4-1-0',
+  '2-prefix-4-1-1',
+  '2-prefix-4-1-2',
+  '2-prefix-4-2-0',
+  '2-prefix-4-2-1',
+  '2-prefix-4-2-2',
+  'prefix-5-0-0',
+  'prefix-5-0-1',
+  'prefix-5-0-2',
+  'prefix-5-1-0',
+  'prefix-5-1-1',
+  'prefix-5-1-2',
+  'prefix-5-2-0',
+  'prefix-5-2-1',
+  'prefix-5-2-2',
+  '2-prefix-5-0-0',
+  '2-prefix-5-0-1',
+  '2-prefix-5-0-2',
+  '2-prefix-5-1-0',
+  '2-prefix-5-1-1',
+  '2-prefix-5-1-2',
+  '2-prefix-5-2-0',
+  '2-prefix-5-2-1',
+  '2-prefix-5-2-2',
+]);
+
 describe('bufferedAsyncMap() values', () => {
   const count = 6;
 
@@ -69,7 +194,7 @@ describe('bufferedAsyncMap() values', () => {
   });
 
   describe('main', () => {
-    it('should return all values from the original AsyncIterable when looped over ', async () => {
+    it('should return all values from the original AsyncIterable when looped over', async () => {
       // Create the promise first, then have it be fully executed using clock.runAllAsync()
       const promisedResult = (async () => {
         /** @type {number[]} */
@@ -622,5 +747,147 @@ describe('bufferedAsyncMap() values', () => {
 
     await clock.runAllAsync();
     nextSpy.should.have.callCount(11);
+  });
+
+  describe('order', () => {
+    it('should be out of order as standard', async () => {
+      const asyncIterable = yieldValuesOverTime(10, i => i % 3 === 0 ? 2000 : 1);
+
+      // Create the promise first, then have it be fully executed using clock.runAllAsync()
+      const promisedResult = (async () => {
+        /** @type {number[]} */
+        const rawResult = [];
+
+        for await (const value of bufferedAsyncMap(asyncIterable, async (item) => {
+          await promisableTimeout(item % 2 === 0 ? 2000 : 1);
+          return item;
+        }, { bufferSize: 3 })) {
+          rawResult.push(value);
+        }
+
+        /** @type {[number[], number]} */
+        const result = [rawResult, Date.now()];
+
+        return result;
+      })();
+
+      await clock.runAllAsync();
+
+      const [result, duration] = await promisedResult;
+
+      result.should.deep.equal([0, 1, 3, 2, 5, 4, 6, 7, 9, 8]);
+      duration.should.equal(8006);
+    });
+
+    it('should ensure in order when requested', async () => {
+      const asyncIterable = yieldValuesOverTime(10, i => i % 3 === 0 ? 2000 : 1);
+
+      // Create the promise first, then have it be fully executed using clock.runAllAsync()
+      const promisedResult = (async () => {
+        /** @type {number[]} */
+        const rawResult = [];
+
+        for await (const value of bufferedAsyncMap(asyncIterable, async (item) => {
+          await promisableTimeout(item % 2 === 0 ? 2000 : 1);
+          return item;
+        }, { bufferSize: 3, ordered: true })) {
+          rawResult.push(value);
+        }
+
+        /** @type {[number[], number]} */
+        const result = [rawResult, Date.now()];
+
+        return result;
+      })();
+
+      await clock.runAllAsync();
+
+      const [result, duration] = await promisedResult;
+
+      result.should.deep.equal([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+      duration.should.equal(10004);
+    });
+
+    it('should handle nested async generator values out of order when looped over', async () => {
+      // Create the promise first, then have it be fully executed using clock.runAllAsync()
+      const promisedResult = (async () => {
+        /** @type {string[]} */
+        const rawResult = [];
+
+        for await (const value of bufferedAsyncMap(baseAsyncIterable, nestedBufferedAsyncMapCallback)) {
+          rawResult.push(value);
+        }
+
+        /** @type {[string[], number]} */
+        const result = [rawResult, Date.now()];
+
+        return result;
+      })();
+
+      await clock.runAllAsync();
+
+      const [result, duration] = await promisedResult;
+
+      result.should.be.an('array')
+        .that.has.members(nestedBufferedAsyncMapOrderedResult())
+        .but.does.not.deep.equal(nestedBufferedAsyncMapOrderedResult());
+
+      duration.should.equal(21900);
+    });
+
+    it('should, when requested, handle nested async generator values in order when looped over', async () => {
+      // Create the promise first, then have it be fully executed using clock.runAllAsync()
+      const promisedResult = (async () => {
+        /** @type {string[]} */
+        const rawResult = [];
+
+        for await (const value of bufferedAsyncMap(baseAsyncIterable, nestedBufferedAsyncMapCallback, { ordered: true })) {
+          rawResult.push(value);
+        }
+
+        /** @type {[string[], number]} */
+        const result = [rawResult, Date.now()];
+
+        return result;
+      })();
+
+      await clock.runAllAsync();
+
+      const [result, duration] = await promisedResult;
+
+      result.should.be.an('array').that.deep.equals(nestedBufferedAsyncMapOrderedResult());
+
+      duration.should.equal(105600);
+    });
+
+    it('should be faster than ordered non-buffered iteration', async () => {
+      // eslint-disable-next-line unicorn/consistent-function-scoping
+      async function * nestedBaseSyncIterable () {
+        yield * nestedYieldValuesOverTime(count, (i) => i % 2 === 1 ? 2000 : 100, nestedBufferedAsyncMapCallback);
+      }
+
+      // Create the promise first, then have it be fully executed using clock.runAllAsync()
+      const promisedResult = (async () => {
+        /** @type {string[]} */
+        const rawResult = [];
+
+        for await (const value of nestedBaseSyncIterable()) {
+          rawResult.push(value);
+        }
+
+        /** @type {[string[], number]} */
+        const result = [rawResult, Date.now()];
+
+        return result;
+      })();
+
+      await clock.runAllAsync();
+
+      const [result, duration] = await promisedResult;
+
+      result.should.be.an('array').that.deep.equals(nestedBufferedAsyncMapOrderedResult());
+
+      duration.should.equal(111900);
+    });
   });
 });

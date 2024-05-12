@@ -5,25 +5,25 @@
 // TODO: Look into https://tc39.es/ecma262/#sec-iteratorclose / https://tc39.es/ecma262/#sec-asynciteratorclose
 // TODO: See "iteratorKind" in https://tc39.es/ecma262/#sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset – see how it loops and validates the returned values
 // TODO: THERE'S ACTUALLY A "throw" method MENTION IN https://tc39.es/ecma262/#sec-generator-function-definitions-runtime-semantics-evaluation: "NOTE: Exceptions from the inner iterator throw method are propagated. Normal completions from an inner throw method are processed similarly to an inner next." THOUGH NOT SURE HOW TO TRIGGER IT IN PRACTICE, SEE yield.spec.js
-// TODO: Have option to persist order? To not use Promise.race()?
 // TODO: Make a proper merge for async iterables by accepting multiple input iterables, see: https://twitter.com/matteocollina/status/1392056092482576385
 
 import { findLeastTargeted } from './lib/find-least-targeted.js';
-import { makeIterableAsync } from './lib/misc.js';
-import { isAsyncIterable, isIterable, isPartOfSet } from './lib/type-checks.js';
+import { arrayDeleteInPlace, makeIterableAsync } from './lib/misc.js';
+import { isAsyncIterable, isIterable, isPartOfArray } from './lib/type-checks.js';
 
 /**
  * @template T
  * @template R
  * @param {AsyncIterable<T> | Iterable<T> | T[]} input
  * @param {(item: T) => (Promise<R>|AsyncIterable<R>)} callback
- * @param {{ bufferSize?: number|undefined }} [options]
+ * @param {{ bufferSize?: number|undefined, ordered?: boolean|undefined }} [options]
  * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]> }}
  */
 export function bufferedAsyncMap (input, callback, options) {
   /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { bufferPromise: BufferPromise, fromSubIterator?: boolean, isSubIterator?: boolean, err?: unknown }>} BufferPromise */
   const {
     bufferSize = 6,
+    ordered = false,
   } = options || {};
 
   /** @type {AsyncIterable<T>} */
@@ -39,11 +39,11 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {AsyncIterator<T, unknown>} */
   const asyncIterator = asyncIterable[Symbol.asyncIterator]();
 
-  /** @type {Set<AsyncIterator<R, unknown>>} */
-  const subIterators = new Set();
+  /** @type {AsyncIterator<R, unknown>[]} */
+  const subIterators = [];
 
-  /** @type {Set<BufferPromise>} */
-  const bufferedPromises = new Set();
+  /** @type {BufferPromise[]} */
+  const bufferedPromises = [];
 
   /** @type {WeakMap<BufferPromise, AsyncIterator<T>|AsyncIterator<R>>} */
   const promisesToSourceIteratorMap = new WeakMap();
@@ -76,8 +76,8 @@ export function bufferedAsyncMap (input, callback, options) {
       );
 
       // TODO: Could we use an AbortController to improve this? See eg. https://github.com/mcollina/hwp/pull/10
-      bufferedPromises.clear();
-      subIterators.clear();
+      bufferedPromises.splice(0, bufferedPromises.length);
+      subIterators.splice(0, subIterators.length);
 
       if (throwAnyError && hasError) {
         throw hasError;
@@ -90,14 +90,20 @@ export function bufferedAsyncMap (input, callback, options) {
   const fillQueue = () => {
     if (hasError || isDone) return;
 
-    // Check which iterator that has the least amount of queued promises right now
-    const iterator = findLeastTargeted(
-      mainReturnedDone ? subIterators : [...subIterators, asyncIterator],
-      bufferedPromises,
-      promisesToSourceIteratorMap
-    );
+    /** @type {AsyncIterator<R, unknown>|undefined} */
+    let currentSubIterator;
 
-    const currentSubIterator = isPartOfSet(iterator, subIterators) ? iterator : undefined;
+    if (ordered) {
+      currentSubIterator = subIterators[0];
+    } else {
+      const iterator = findLeastTargeted(
+        mainReturnedDone ? subIterators : [...subIterators, asyncIterator],
+        bufferedPromises,
+        promisesToSourceIteratorMap
+      );
+
+      currentSubIterator = isPartOfArray(iterator, subIterators) ? iterator : undefined;
+    }
 
     /** @type {BufferPromise} */
     const bufferPromise = currentSubIterator
@@ -110,7 +116,7 @@ export function bufferedAsyncMap (input, callback, options) {
             throw new TypeError('Expected an object value');
           }
           if ('err' in result || result.done) {
-            subIterators.delete(currentSubIterator);
+            arrayDeleteInPlace(subIterators, currentSubIterator);
           }
 
           /** @type {Awaited<BufferPromise>} */
@@ -174,29 +180,43 @@ export function bufferedAsyncMap (input, callback, options) {
         });
 
     promisesToSourceIteratorMap.set(bufferPromise, currentSubIterator || asyncIterator);
-    bufferedPromises.add(bufferPromise);
 
-    if (bufferedPromises.size < bufferSize) {
+    if (ordered && currentSubIterator) {
+      let i = 0;
+
+      while (promisesToSourceIteratorMap.get(/** @type {BufferPromise} */ (bufferedPromises[i])) === currentSubIterator) {
+        i += 1;
+      }
+
+      bufferedPromises.splice(i, 0, bufferPromise);
+    } else {
+      bufferedPromises.push(bufferPromise);
+    }
+
+    if (bufferedPromises.length < bufferSize) {
       fillQueue();
     }
   };
 
   /** @type {AsyncIterator<R>["next"]} */
   const nextValue = async () => {
-    if (bufferedPromises.size === 0) return markAsEnded(true);
+    const nextBufferedPromise = bufferedPromises[0];
+
+    if (!nextBufferedPromise) return markAsEnded(true);
     if (isDone) return { done: true, value: undefined };
+
+    /** @type {Awaited<BufferPromise>} */
+    const resolvedPromise = await (ordered ? nextBufferedPromise : Promise.race(bufferedPromises));
+    arrayDeleteInPlace(bufferedPromises, resolvedPromise.bufferPromise);
 
     // Wait for some of the current promises to be finished
     const {
-      bufferPromise,
       done,
       err,
       fromSubIterator,
       isSubIterator,
       value,
-    } = await Promise.race(bufferedPromises);
-
-    bufferedPromises.delete(bufferPromise);
+    } = resolvedPromise;
 
     // We are mandated by the spec to always do this return if the iterator is done
     if (isDone) {
@@ -206,16 +226,16 @@ export function bufferedAsyncMap (input, callback, options) {
         hasError = err instanceof Error ? err : new Error('Unknown error');
       }
 
-      if (fromSubIterator || subIterators.size !== 0) {
+      if (fromSubIterator || subIterators.length > 0) {
         fillQueue();
       }
 
-      return bufferedPromises.size === 0
+      return bufferedPromises.length === 0
         ? markAsEnded(true)
         : nextValue();
     } else if (isSubIterator && isAsyncIterable(value)) {
       // TODO: Handle possible error here? Or too obscure?
-      subIterators.add(value[Symbol.asyncIterator]());
+      subIterators.unshift(value[Symbol.asyncIterator]());
       fillQueue();
       return nextValue();
     } else {
