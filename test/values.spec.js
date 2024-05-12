@@ -6,6 +6,7 @@ import sinonChai from 'sinon-chai';
 
 import {
   bufferedAsyncMap,
+  mergeIterables,
 } from '../index.js';
 
 import {
@@ -193,62 +194,60 @@ describe('bufferedAsyncMap() values', () => {
     sinon.restore();
   });
 
-  describe('main', () => {
-    it('should return all values from the original AsyncIterable when looped over', async () => {
-      // Create the promise first, then have it be fully executed using clock.runAllAsync()
-      const promisedResult = (async () => {
-        /** @type {number[]} */
-        const rawResult = [];
+  it('should return all values from the original AsyncIterable when looped over', async () => {
+    // Create the promise first, then have it be fully executed using clock.runAllAsync()
+    const promisedResult = (async () => {
+      /** @type {number[]} */
+      const rawResult = [];
 
-        for await (const value of bufferedAsyncMap(baseAsyncIterable, async (item) => item)) {
-          rawResult.push(value);
-        }
+      for await (const value of bufferedAsyncMap(baseAsyncIterable, async (item) => item)) {
+        rawResult.push(value);
+      }
 
-        /** @type {[number[], number]} */
-        const result = [rawResult, Date.now()];
+      /** @type {[number[], number]} */
+      const result = [rawResult, Date.now()];
 
-        return result;
-      })();
+      return result;
+    })();
 
-      await clock.runAllAsync();
+    await clock.runAllAsync();
 
-      const [result, duration] = await promisedResult;
+    const [result, duration] = await promisedResult;
 
-      result.should.deep.equal(expectedResult);
-      duration.should.equal(6300);
-    });
+    result.should.deep.equal(expectedResult);
+    duration.should.equal(6300);
+  });
 
-    it('should return all values from the original AsyncIterable when accessed directly', async () => {
-      // Create the promise first, then have it be fully executed using clock.runAllAsync()
-      const promisedResult = (async () => {
-        const asyncIterable = bufferedAsyncMap(baseAsyncIterable, async (item) => item);
-        const asyncIterator = asyncIterable[Symbol.asyncIterator]();
+  it('should return all values from the original AsyncIterable when accessed directly', async () => {
+    // Create the promise first, then have it be fully executed using clock.runAllAsync()
+    const promisedResult = (async () => {
+      const asyncIterable = bufferedAsyncMap(baseAsyncIterable, async (item) => item);
+      const asyncIterator = asyncIterable[Symbol.asyncIterator]();
 
-        /** @type {Promise<IteratorResult<number, void>>[]} */
-        const iterations = [];
+      /** @type {Promise<IteratorResult<number, void>>[]} */
+      const iterations = [];
 
-        for (let i = 0; i < count; i++) {
-          iterations.push(asyncIterator.next());
-        }
+      for (let i = 0; i < count; i++) {
+        iterations.push(asyncIterator.next());
+      }
 
-        const rawResult = await Promise.all(iterations);
+      const rawResult = await Promise.all(iterations);
 
-        /** @type {[(number|void)[], number]} */
-        const result = [
-          rawResult.map(item => item.value),
-          Date.now(),
-        ];
+      /** @type {[(number|void)[], number]} */
+      const result = [
+        rawResult.map(item => item.value),
+        Date.now(),
+      ];
 
-        return result;
-      })();
+      return result;
+    })();
 
-      await clock.runAllAsync();
+    await clock.runAllAsync();
 
-      const [result, duration] = await promisedResult;
+    const [result, duration] = await promisedResult;
 
-      result.should.deep.equal(expectedResult);
-      duration.should.equal(4300);
-    });
+    result.should.deep.equal(expectedResult);
+    duration.should.equal(4300);
   });
 
   it('should return all values from the original AsyncIterable when given as an array', async () => {
@@ -280,7 +279,7 @@ describe('bufferedAsyncMap() values', () => {
     duration.should.equal(2000);
   });
 
-  it('should handle chained async generator values from the original AsyncIterable when looped over', async () => {
+  it('should handle nested async generator values from the original AsyncIterable when looped over', async () => {
     // Create the promise first, then have it be fully executed using clock.runAllAsync()
     const promisedResult = (async () => {
       /** @type {string[]} */
@@ -888,6 +887,48 @@ describe('bufferedAsyncMap() values', () => {
       result.should.be.an('array').that.deep.equals(nestedBufferedAsyncMapOrderedResult());
 
       duration.should.equal(111900);
+    });
+  });
+
+  describe('mergeIterables', () => {
+    it('should process iterables in parallel', async () => {
+      // Create the promise first, then have it be fully executed using clock.runAllAsync()
+      const promisedResult = (async () => {
+        /** @type {string[]} */
+        const rawResult = [];
+
+        for await (const value of mergeIterables([
+          yieldValuesOverTimeWithPrefix(6, (i) => i % 2 === 1 ? 2000 : 100, 'first-'),
+          yieldValuesOverTimeWithPrefix(6, (i) => i % 2 === 1 ? 2000 : 100, 'second-'),
+        ])) {
+          rawResult.push(value);
+        }
+
+        /** @type {[string[], number]} */
+        const result = [rawResult, Date.now()];
+
+        return result;
+      })();
+
+      await clock.runAllAsync();
+
+      const [result, duration] = await promisedResult;
+
+      result.should.deep.equal([
+        'first-0',
+        'second-0',
+        'second-1',
+        'first-1',
+        'second-2',
+        'first-2',
+        'second-3',
+        'first-3',
+        'second-4',
+        'first-4',
+        'second-5',
+        'first-5',
+      ]);
+      duration.should.equal(6300);
     });
   });
 });

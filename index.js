@@ -5,11 +5,29 @@
 // TODO: Look into https://tc39.es/ecma262/#sec-iteratorclose / https://tc39.es/ecma262/#sec-asynciteratorclose
 // TODO: See "iteratorKind" in https://tc39.es/ecma262/#sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset – see how it loops and validates the returned values
 // TODO: THERE'S ACTUALLY A "throw" method MENTION IN https://tc39.es/ecma262/#sec-generator-function-definitions-runtime-semantics-evaluation: "NOTE: Exceptions from the inner iterator throw method are propagated. Normal completions from an inner throw method are processed similarly to an inner next." THOUGH NOT SURE HOW TO TRIGGER IT IN PRACTICE, SEE yield.spec.js
-// TODO: Make a proper merge for async iterables by accepting multiple input iterables, see: https://twitter.com/matteocollina/status/1392056092482576385
 
 import { findLeastTargeted } from './lib/find-least-targeted.js';
 import { arrayDeleteInPlace, makeIterableAsync } from './lib/misc.js';
 import { isAsyncIterable, isIterable, isPartOfArray } from './lib/type-checks.js';
+
+/**
+ * @template T
+ * @param {AsyncIterable<T> | Iterable<T> | T[]} item
+ * @returns {AsyncIterable<T>}
+ */
+async function * yieldIterable (item) {
+  yield * item;
+}
+
+/**
+ * @template T
+ * @param {Array<AsyncIterable<T> | Iterable<T> | T[]>} input
+ * @param {{ bufferSize?: number|undefined }} [options]
+ * @returns {AsyncIterable<T>}
+ */
+export async function * mergeIterables (input, { bufferSize } = {}) {
+  yield * bufferedAsyncMap(input, yieldIterable, { bufferSize });
+}
 
 /**
  * @template T
