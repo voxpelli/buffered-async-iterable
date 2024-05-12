@@ -42,3 +42,17 @@ export async function * yieldValuesOverTimeWithPrefix (count, wait, prefix) {
     await promisableTimeout(waitCallback(i));
   }
 }
+
+/**
+ * @param {number} count
+ * @param {number|((i: number) => number)} wait
+ * @param {(i: number) => AsyncGenerator<string>} nested
+ * @returns {AsyncIterable<string>}
+ */
+export async function * nestedYieldValuesOverTime (count, wait, nested) {
+  const waitCallback = typeof wait === 'number' ? () => wait : wait;
+  for (let i = 0; i < count; i++) {
+    yield * nested(i);
+    await promisableTimeout(waitCallback(i));
+  }
+}

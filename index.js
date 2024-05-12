@@ -9,8 +9,8 @@
 // TODO: Make a proper merge for async iterables by accepting multiple input iterables, see: https://twitter.com/matteocollina/status/1392056092482576385
 
 import { findLeastTargeted } from './lib/find-least-targeted.js';
-import { makeIterableAsync } from './lib/misc.js';
-import { isAsyncIterable, isIterable, isPartOfSet } from './lib/type-checks.js';
+import { arrayDeleteInPlace, makeIterableAsync } from './lib/misc.js';
+import { isAsyncIterable, isIterable, isPartOfArray } from './lib/type-checks.js';
 
 /**
  * @template T
@@ -40,8 +40,8 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {AsyncIterator<T, unknown>} */
   const asyncIterator = asyncIterable[Symbol.asyncIterator]();
 
-  /** @type {Set<AsyncIterator<R, unknown>>} */
-  const subIterators = new Set();
+  /** @type {AsyncIterator<R, unknown>[]} */
+  const subIterators = [];
 
   /** @type {BufferPromise[]} */
   const bufferedPromises = [];
@@ -78,7 +78,7 @@ export function bufferedAsyncMap (input, callback, options) {
 
       // TODO: Could we use an AbortController to improve this? See eg. https://github.com/mcollina/hwp/pull/10
       bufferedPromises.splice(0, bufferedPromises.length);
-      subIterators.clear();
+      subIterators.splice(0, subIterators.length);
 
       if (throwAnyError && hasError) {
         throw hasError;
@@ -91,14 +91,20 @@ export function bufferedAsyncMap (input, callback, options) {
   const fillQueue = () => {
     if (hasError || isDone) return;
 
-    // Check which iterator that has the least amount of queued promises right now
-    const iterator = findLeastTargeted(
-      mainReturnedDone ? subIterators : [...subIterators, asyncIterator],
-      bufferedPromises,
-      promisesToSourceIteratorMap
-    );
+    /** @type {AsyncIterator<R, unknown>|undefined} */
+    let currentSubIterator;
 
-    const currentSubIterator = isPartOfSet(iterator, subIterators) ? iterator : undefined;
+    if (ordered) {
+      currentSubIterator = subIterators[0];
+    } else {
+      const iterator = findLeastTargeted(
+        mainReturnedDone ? subIterators : [...subIterators, asyncIterator],
+        bufferedPromises,
+        promisesToSourceIteratorMap
+      );
+
+      currentSubIterator = isPartOfArray(iterator, subIterators) ? iterator : undefined;
+    }
 
     /** @type {BufferPromise} */
     const bufferPromise = currentSubIterator
@@ -111,7 +117,7 @@ export function bufferedAsyncMap (input, callback, options) {
             throw new TypeError('Expected an object value');
           }
           if ('err' in result || result.done) {
-            subIterators.delete(currentSubIterator);
+            arrayDeleteInPlace(subIterators, currentSubIterator);
           }
 
           /** @type {Awaited<BufferPromise>} */
@@ -175,7 +181,18 @@ export function bufferedAsyncMap (input, callback, options) {
         });
 
     promisesToSourceIteratorMap.set(bufferPromise, currentSubIterator || asyncIterator);
-    bufferedPromises.push(bufferPromise);
+
+    if (ordered && currentSubIterator) {
+      let i = 0;
+
+      while (promisesToSourceIteratorMap.get(/** @type {BufferPromise} */ (bufferedPromises[i])) === currentSubIterator) {
+        i += 1;
+      }
+
+      bufferedPromises.splice(i, 0, bufferPromise);
+    } else {
+      bufferedPromises.push(bufferPromise);
+    }
 
     if (bufferedPromises.length < bufferSize) {
       fillQueue();
@@ -191,7 +208,7 @@ export function bufferedAsyncMap (input, callback, options) {
 
     /** @type {Awaited<BufferPromise>} */
     const resolvedPromise = await (ordered ? nextBufferedPromise : Promise.race(bufferedPromises));
-    bufferedPromises.splice(bufferedPromises.indexOf(resolvedPromise.bufferPromise), 1);
+    arrayDeleteInPlace(bufferedPromises, resolvedPromise.bufferPromise);
 
     // Wait for some of the current promises to be finished
     const {
@@ -210,7 +227,7 @@ export function bufferedAsyncMap (input, callback, options) {
         hasError = err instanceof Error ? err : new Error('Unknown error');
       }
 
-      if (fromSubIterator || subIterators.size !== 0) {
+      if (fromSubIterator || subIterators.length > 0) {
         fillQueue();
       }
 
@@ -218,11 +235,8 @@ export function bufferedAsyncMap (input, callback, options) {
         ? markAsEnded(true)
         : nextValue();
     } else if (isSubIterator && isAsyncIterable(value)) {
-      if (ordered) {
-        throw new Error('Sub iterators not yet supported in ordered iterations');
-      }
       // TODO: Handle possible error here? Or too obscure?
-      subIterators.add(value[Symbol.asyncIterator]());
+      subIterators.unshift(value[Symbol.asyncIterator]());
       fillQueue();
       return nextValue();
     } else {
