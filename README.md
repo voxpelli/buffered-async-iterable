@@ -69,9 +69,15 @@ for await (const item of mappedIterator) {
 
 ## API
 
-### `bufferedAsyncMap(input, callback[, { bufferSize=6 }]) => AsyncIterableIterator`
+### bufferedAsyncMap()
 
 Iterates and applies the `callback` to up to `bufferSize` items from `input` yielding values as they resolve.
+
+#### Syntax
+
+`bufferedAsyncMap(input, callback[, { bufferSize=6, ordered=false }]) => AsyncIterableIterator`
+
+#### Arguments
 
 * `input` – either an async iterable, an ordinare iterable or an array
 * `callback(item)` – should be either an async generator or an ordinary async function. Items from async generators are buffered in the main buffer and the buffer is refilled by the one that has least items in the current buffer (`input` is considered equal to sub iterators in this regard when refilling the buffer)
@@ -80,6 +86,22 @@ Iterates and applies the `callback` to up to `bufferSize` items from `input` yie
 
 * `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultanoeus items that processed at once in the buffer.
 * `ordered` – _optional_ – defaults to `false`, when `true` the result will be returned in order instead of unordered
+
+### mergeIterables()
+
+Merges all given (async) iterables in parallel, returning the values as they resolve
+
+#### Syntax
+
+`mergeIterables(input[, { bufferSize=6 }]) => AsyncIterableIterator`
+
+#### Arguments
+
+* `input` – either an async iterable, an ordinare iterable or an array
+
+#### Options
+
+* `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultanoeus items that processed at once in the buffer.
 
 ## Similar modules
 
