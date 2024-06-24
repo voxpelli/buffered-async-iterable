@@ -97,7 +97,6 @@ describe('bufferedAsyncMap() AsyncInterface return()', () => {
 
       return Date.now();
     })()
-      // eslint-disable-next-line promise/prefer-await-to-then
       .then(() => false, () => true);
 
     await clock.runAllAsync();

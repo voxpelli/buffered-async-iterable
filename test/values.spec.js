@@ -505,7 +505,6 @@ describe('bufferedAsyncMap() values', () => {
         result.push(value);
       }
     })()
-      // eslint-disable-next-line promise/prefer-await-to-then
       .then(
         () => {
           throw new Error('Expected a rejection');
@@ -545,7 +544,6 @@ describe('bufferedAsyncMap() values', () => {
         result.push(value);
       }
     })()
-      // eslint-disable-next-line promise/prefer-await-to-then
       .then(
         () => {
           throw new Error('Expected a rejection');
@@ -610,7 +608,6 @@ describe('bufferedAsyncMap() values', () => {
         result.push(value);
       }
     })()
-      // eslint-disable-next-line promise/prefer-await-to-then
       .then(
         () => {
           throw new Error('Expected a rejection');
@@ -641,7 +638,6 @@ describe('bufferedAsyncMap() values', () => {
     const iteratorsNext = iterators.map(async iterator =>
       iterator[Symbol.asyncIterator]()
         .next()
-        // eslint-disable-next-line promise/prefer-await-to-then
         .catch(err => ({ err }))
     );
 
@@ -672,7 +668,6 @@ describe('bufferedAsyncMap() values', () => {
 
       return result;
     })()
-      // eslint-disable-next-line promise/prefer-await-to-then
       .then(
         () => {
           throw new Error('Expected a rejection');
@@ -709,7 +704,6 @@ describe('bufferedAsyncMap() values', () => {
 
       return result;
     })()
-      // eslint-disable-next-line promise/prefer-await-to-then
       .then(
         () => {
           throw new Error('Expected a rejection');

@@ -1,5 +1,3 @@
-/* eslint-disable promise/prefer-await-to-then */
-
 // TODO: Get inspired by Matteos https://github.com/mcollina/hwp/blob/main/index.js, eg AbortController is nice?
 // TODO: Check docs here https://tc39.es/ecma262/#sec-operations-on-iterator-objects
 // TODO: Look into https://tc39.es/ecma262/#sec-iteratorclose / https://tc39.es/ecma262/#sec-asynciteratorclose
@@ -170,7 +168,6 @@ export function bufferedAsyncMap (input, callback, options) {
             };
           }
 
-          // eslint-disable-next-line promise/no-callback-in-promise
           const callbackResult = callback(result.value);
           const isSubIterator = isAsyncIterable(callbackResult);
 
