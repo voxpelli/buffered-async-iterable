@@ -1,3 +1,5 @@
+/* eslint-disable promise/prefer-await-to-then */
+
 import chai from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import chaiQuantifiers from 'chai-quantifiers';
