@@ -70,6 +70,6 @@
     "sinon-chai": "^3.7.0",
     "type-coverage": "^2.29.1",
     "typescript": "~5.5.3",
-    "validate-conventional-commit": "^1.0.3"
+    "validate-conventional-commit": "^1.0.4"
   }
 }
