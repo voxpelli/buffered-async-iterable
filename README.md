@@ -56,7 +56,7 @@ for await (const item of mappedIterator) {
 ```javascript
 import { bufferedAsyncMap } from 'buffered-async-iterable';
 
-const mappedIterator = bufferedAsyncMap(['foo'], async function * (item) => {
+const mappedIterator = bufferedAsyncMap(['foo'], async function * (item) {
   // Apply additional async lookup / processing
   yield ...
   yield * ...
