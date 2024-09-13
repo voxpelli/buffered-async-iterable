@@ -7,5 +7,8 @@
     "benchmark/**/*.js",
     "lib/**/*.js",
     "test/**/*.js",
-  ]
+  ],
+  "compilerOptions": {
+    "types": ["node", "mocha"]
+  }
 }

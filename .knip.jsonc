@@ -3,6 +3,5 @@
   "entry": [
     "index.js!",
     "benchmark/*.js"
-  ],
-  "ignoreDependencies": ["@types/mocha"]
+  ]
 }
