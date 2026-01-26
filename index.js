@@ -126,76 +126,76 @@ export function bufferedAsyncMap (input, callback, options) {
     /** @type {BufferPromise} */
     const bufferPromise = currentSubIterator
       ? Promise.resolve(currentSubIterator.next())
-        .catch(err => ({
-          err: err instanceof Error ? err : new Error('Unknown subiterator error'),
-        }))
-        .then(async result => {
-          if (typeof result !== 'object') {
-            throw new TypeError('Expected an object value');
-          }
-          if ('err' in result || result.done) {
-            arrayDeleteInPlace(subIterators, currentSubIterator);
-          }
+          .catch(err => ({
+            err: err instanceof Error ? err : new Error('Unknown subiterator error'),
+          }))
+          .then(async result => {
+            if (typeof result !== 'object') {
+              throw new TypeError('Expected an object value');
+            }
+            if ('err' in result || result.done) {
+              arrayDeleteInPlace(subIterators, currentSubIterator);
+            }
 
-          /** @type {Awaited<BufferPromise>} */
-          const promiseValue = {
-            bufferPromise,
-            fromSubIterator: true,
-            ...(
-              'err' in result
-                ? { done: true, value: undefined, ...result }
-                : result
-            ),
-          };
-
-          return promiseValue;
-        })
-      : Promise.resolve(asyncIterator.next())
-        .catch(err => ({
-          err: err instanceof Error ? err : new Error('Unknown iterator error'),
-        }))
-        .then(async result => {
-          if (typeof result !== 'object') {
-            throw new TypeError('Expected an object value');
-          }
-          if ('err' in result || result.done) {
-            mainReturnedDone = true;
-            return {
+            /** @type {Awaited<BufferPromise>} */
+            const promiseValue = {
               bufferPromise,
+              fromSubIterator: true,
               ...(
                 'err' in result
                   ? { done: true, value: undefined, ...result }
                   : result
               ),
             };
-          }
 
-          // eslint-disable-next-line promise/no-callback-in-promise
-          const callbackResult = callback(result.value);
-          const isSubIterator = isAsyncIterable(callbackResult);
+            return promiseValue;
+          })
+      : Promise.resolve(asyncIterator.next())
+          .catch(err => ({
+            err: err instanceof Error ? err : new Error('Unknown iterator error'),
+          }))
+          .then(async result => {
+            if (typeof result !== 'object') {
+              throw new TypeError('Expected an object value');
+            }
+            if ('err' in result || result.done) {
+              mainReturnedDone = true;
+              return {
+                bufferPromise,
+                ...(
+                  'err' in result
+                    ? { done: true, value: undefined, ...result }
+                    : result
+                ),
+              };
+            }
 
-          /** @type {Awaited<BufferPromise>} */
-          let promiseValue;
+            // eslint-disable-next-line promise/no-callback-in-promise
+            const callbackResult = callback(result.value);
+            const isSubIterator = isAsyncIterable(callbackResult);
 
-          try {
-            const value = await callbackResult;
+            /** @type {Awaited<BufferPromise>} */
+            let promiseValue;
 
-            promiseValue = {
-              bufferPromise,
-              isSubIterator,
-              value,
-            };
-          } catch (err) {
-            promiseValue = {
-              bufferPromise,
-              done: true,
-              err: err instanceof Error ? err : new Error('Unknown callback error'),
-              value: undefined,
-            };
-          }
+            try {
+              const value = await callbackResult;
 
-          return promiseValue;
-        });
+              promiseValue = {
+                bufferPromise,
+                isSubIterator,
+                value,
+              };
+            } catch (err) {
+              promiseValue = {
+                bufferPromise,
+                done: true,
+                err: err instanceof Error ? err : new Error('Unknown callback error'),
+                value: undefined,
+              };
+            }
+
+            return promiseValue;
+          });
 
     promisesToSourceIteratorMap.set(bufferPromise, currentSubIterator || asyncIterator);
 
