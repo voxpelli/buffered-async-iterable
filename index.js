@@ -223,7 +223,7 @@ export function bufferedAsyncMap (input, callback, options) {
       if (ordered && currentSubIterator) {
         let i = 0;
 
-        while (promisesToSourceIteratorMap.get(/** @type {BufferPromise} */ (bufferedPromises[i])) === currentSubIterator) {
+        while (i < bufferedPromises.length && promisesToSourceIteratorMap.get(/** @type {BufferPromise} */ (bufferedPromises[i])) === currentSubIterator) {
           i += 1;
         }
 
