@@ -6,6 +6,7 @@
 // TODO: See "iteratorKind" in https://tc39.es/ecma262/#sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset – see how it loops and validates the returned values
 // TODO: THERE'S ACTUALLY A "throw" method MENTION IN https://tc39.es/ecma262/#sec-generator-function-definitions-runtime-semantics-evaluation: "NOTE: Exceptions from the inner iterator throw method are propagated. Normal completions from an inner throw method are processed similarly to an inner next." THOUGH NOT SURE HOW TO TRIGGER IT IN PRACTICE, SEE yield.spec.js
 
+import { isType, typesafeIsArray } from '@voxpelli/typed-utils';
 import { findLeastTargeted } from './lib/find-least-targeted.js';
 import { arrayDeleteInPlace, makeIterableAsync } from './lib/misc.js';
 import { isAsyncIterable, isIterable, isPartOfArray } from './lib/type-checks.js';
@@ -51,8 +52,8 @@ export function bufferedAsyncMap (input, callback, options) {
 
   if (!input) throw new TypeError('Expected input to be provided');
   if (!isAsyncIterable(asyncIterable)) throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
-  if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');
-  if (typeof bufferSize !== 'number') throw new TypeError('Expected bufferSize to be a number');
+  if (!isType(callback, 'function')) throw new TypeError('Expected callback to be a function');
+  if (!isType(bufferSize, 'number')) throw new TypeError('Expected bufferSize to be a number');
 
   /** @type {AsyncIterator<T, unknown>} */
   const asyncIterator = asyncIterable[Symbol.asyncIterator]();
@@ -130,7 +131,7 @@ export function bufferedAsyncMap (input, callback, options) {
           err: err instanceof Error ? err : new Error('Unknown subiterator error'),
         }))
         .then(async result => {
-          if (typeof result !== 'object') {
+          if (!isType(result, 'object')) {
             throw new TypeError('Expected an object value');
           }
           if ('err' in result || result.done) {
@@ -155,7 +156,7 @@ export function bufferedAsyncMap (input, callback, options) {
           err: err instanceof Error ? err : new Error('Unknown iterator error'),
         }))
         .then(async result => {
-          if (typeof result !== 'object') {
+          if (!isType(result, 'object')) {
             throw new TypeError('Expected an object value');
           }
           if ('err' in result || result.done) {
