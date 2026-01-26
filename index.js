@@ -121,8 +121,10 @@ export function bufferedAsyncMap (input, callback, options) {
 
   const fillQueue = () => {
     // Use a loop instead of recursion to avoid potential stack overflow
-    // eslint-disable-next-line no-unmodified-loop-condition -- hasError and isDone are modified via promise callbacks
-    while (bufferedPromises.length < bufferSize && !hasError && !isDone) {
+    while (bufferedPromises.length < bufferSize) {
+      // Check conditions at start of each iteration to avoid eslint false positive
+      if (hasError || isDone) break;
+
       /** @type {AsyncIterator<R, unknown>|undefined} */
       let currentSubIterator;
 
