@@ -7,7 +7,7 @@
 // TODO: THERE'S ACTUALLY A "throw" method MENTION IN https://tc39.es/ecma262/#sec-generator-function-definitions-runtime-semantics-evaluation: "NOTE: Exceptions from the inner iterator throw method are propagated. Normal completions from an inner throw method are processed similarly to an inner next." THOUGH NOT SURE HOW TO TRIGGER IT IN PRACTICE, SEE yield.spec.js
 
 import { findLeastTargeted } from './lib/find-least-targeted.js';
-import { arrayDeleteInPlace, makeIterableAsync } from './lib/misc.js';
+import { arrayDeleteInPlace, makeIterableAsync, normalizeError } from './lib/misc.js';
 import { isAsyncIterable, isIterable, isPartOfArray } from './lib/type-checks.js';
 
 /**
@@ -17,6 +17,20 @@ import { isAsyncIterable, isIterable, isPartOfArray } from './lib/type-checks.js
  */
 async function * yieldIterable (item) {
   yield * item;
+}
+
+/**
+ * Generator that yields items from array and an additional item
+ * Avoids array spread in hot paths
+ *
+ * @template T, U
+ * @param {T[]} array
+ * @param {U} item
+ * @returns {Iterable<T | U>}
+ */
+function * yieldArrayWithItem (array, item) {
+  yield * array;
+  yield item;
 }
 
 /**
@@ -106,113 +120,115 @@ export function bufferedAsyncMap (input, callback, options) {
   };
 
   const fillQueue = () => {
-    if (hasError || isDone) return;
+    // Use a loop instead of recursion to avoid potential stack overflow
+    // eslint-disable-next-line no-unmodified-loop-condition -- hasError and isDone are modified via promise callbacks
+    while (bufferedPromises.length < bufferSize && !hasError && !isDone) {
+      /** @type {AsyncIterator<R, unknown>|undefined} */
+      let currentSubIterator;
 
-    /** @type {AsyncIterator<R, unknown>|undefined} */
-    let currentSubIterator;
+      if (ordered) {
+        currentSubIterator = subIterators[0];
+      } else {
+        const targets = mainReturnedDone
+          ? subIterators
+          : yieldArrayWithItem(subIterators, asyncIterator);
 
-    if (ordered) {
-      currentSubIterator = subIterators[0];
-    } else {
-      const iterator = findLeastTargeted(
-        mainReturnedDone ? subIterators : [...subIterators, asyncIterator],
-        bufferedPromises,
-        promisesToSourceIteratorMap
-      );
+        const iterator = findLeastTargeted(
+          targets,
+          bufferedPromises,
+          promisesToSourceIteratorMap
+        );
 
-      currentSubIterator = isPartOfArray(iterator, subIterators) ? iterator : undefined;
-    }
+        currentSubIterator = isPartOfArray(iterator, subIterators) ? iterator : undefined;
+      }
 
-    /** @type {BufferPromise} */
-    const bufferPromise = currentSubIterator
-      ? Promise.resolve(currentSubIterator.next())
-          .catch(err => ({
-            err: err instanceof Error ? err : new Error('Unknown subiterator error'),
-          }))
-          .then(async result => {
-            if (typeof result !== 'object') {
-              throw new TypeError('Expected an object value');
-            }
-            if ('err' in result || result.done) {
-              arrayDeleteInPlace(subIterators, currentSubIterator);
-            }
+      /** @type {BufferPromise} */
+      const bufferPromise = currentSubIterator
+        ? Promise.resolve(currentSubIterator.next())
+            .catch(err => ({
+              err: normalizeError(err, 'Unknown subiterator error'),
+            }))
+            .then(async result => {
+              if (typeof result !== 'object') {
+                throw new TypeError('Expected an object value');
+              }
+              if ('err' in result || result.done) {
+                arrayDeleteInPlace(subIterators, currentSubIterator);
+              }
 
-            /** @type {Awaited<BufferPromise>} */
-            const promiseValue = {
-              bufferPromise,
-              fromSubIterator: true,
-              ...(
-                'err' in result
-                  ? { done: true, value: undefined, ...result }
-                  : result
-              ),
-            };
-
-            return promiseValue;
-          })
-      : Promise.resolve(asyncIterator.next())
-          .catch(err => ({
-            err: err instanceof Error ? err : new Error('Unknown iterator error'),
-          }))
-          .then(async result => {
-            if (typeof result !== 'object') {
-              throw new TypeError('Expected an object value');
-            }
-            if ('err' in result || result.done) {
-              mainReturnedDone = true;
-              return {
+              /** @type {Awaited<BufferPromise>} */
+              const promiseValue = {
                 bufferPromise,
+                fromSubIterator: true,
                 ...(
                   'err' in result
                     ? { done: true, value: undefined, ...result }
                     : result
                 ),
               };
-            }
 
-            // eslint-disable-next-line promise/no-callback-in-promise
-            const callbackResult = callback(result.value);
-            const isSubIterator = isAsyncIterable(callbackResult);
+              return promiseValue;
+            })
+        : Promise.resolve(asyncIterator.next())
+            .catch(err => ({
+              err: normalizeError(err, 'Unknown iterator error'),
+            }))
+            .then(async result => {
+              if (typeof result !== 'object') {
+                throw new TypeError('Expected an object value');
+              }
+              if ('err' in result || result.done) {
+                mainReturnedDone = true;
+                return {
+                  bufferPromise,
+                  ...(
+                    'err' in result
+                      ? { done: true, value: undefined, ...result }
+                      : result
+                  ),
+                };
+              }
 
-            /** @type {Awaited<BufferPromise>} */
-            let promiseValue;
+              // eslint-disable-next-line promise/no-callback-in-promise
+              const callbackResult = callback(result.value);
+              const isSubIterator = isAsyncIterable(callbackResult);
 
-            try {
-              const value = await callbackResult;
+              /** @type {Awaited<BufferPromise>} */
+              let promiseValue;
 
-              promiseValue = {
-                bufferPromise,
-                isSubIterator,
-                value,
-              };
-            } catch (err) {
-              promiseValue = {
-                bufferPromise,
-                done: true,
-                err: err instanceof Error ? err : new Error('Unknown callback error'),
-                value: undefined,
-              };
-            }
+              try {
+                const value = await callbackResult;
 
-            return promiseValue;
-          });
+                promiseValue = {
+                  bufferPromise,
+                  isSubIterator,
+                  value,
+                };
+              } catch (err) {
+                promiseValue = {
+                  bufferPromise,
+                  done: true,
+                  err: normalizeError(err, 'Unknown callback error'),
+                  value: undefined,
+                };
+              }
 
-    promisesToSourceIteratorMap.set(bufferPromise, currentSubIterator || asyncIterator);
+              return promiseValue;
+            });
 
-    if (ordered && currentSubIterator) {
-      let i = 0;
+      promisesToSourceIteratorMap.set(bufferPromise, currentSubIterator || asyncIterator);
 
-      while (promisesToSourceIteratorMap.get(/** @type {BufferPromise} */ (bufferedPromises[i])) === currentSubIterator) {
-        i += 1;
+      if (ordered && currentSubIterator) {
+        let i = 0;
+
+        while (promisesToSourceIteratorMap.get(/** @type {BufferPromise} */ (bufferedPromises[i])) === currentSubIterator) {
+          i += 1;
+        }
+
+        bufferedPromises.splice(i, 0, bufferPromise);
+      } else {
+        bufferedPromises.push(bufferPromise);
       }
-
-      bufferedPromises.splice(i, 0, bufferPromise);
-    } else {
-      bufferedPromises.push(bufferPromise);
-    }
-
-    if (bufferedPromises.length < bufferSize) {
-      fillQueue();
     }
   };
 
@@ -241,7 +257,7 @@ export function bufferedAsyncMap (input, callback, options) {
       return { done: true, value: undefined };
     } else if (err || done) {
       if (err && !hasError) {
-        hasError = err instanceof Error ? err : new Error('Unknown error');
+        hasError = normalizeError(err, 'Unknown error');
       }
 
       if (fromSubIterator || subIterators.length > 0) {
