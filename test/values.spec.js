@@ -10,7 +10,6 @@ import {
   bufferedAsyncMap,
   mergeIterables,
 } from '../index.js';
-
 import {
   isAsyncGenerator,
   nestedYieldValuesOverTime,
@@ -353,9 +352,7 @@ describe('bufferedAsyncMap() values', () => {
       /** @type {AsyncIterable<string>[]} */
       const rawResult = [];
 
-      for await (const value of bufferedAsyncMap(baseAsyncIterable, async function (item) {
-        return yieldValuesOverTimeWithPrefix(2, (i) => i % 2 === 1 ? 2000 : 100, 'prefix-' + item + '-');
-      })) {
+      for await (const value of bufferedAsyncMap(baseAsyncIterable, async (item) => yieldValuesOverTimeWithPrefix(2, (i) => i % 2 === 1 ? 2000 : 100, 'prefix-' + item + '-'))) {
         rawResult.push(value);
       }
 

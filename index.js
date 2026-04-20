@@ -94,8 +94,8 @@ export function bufferedAsyncMap (input, callback, options) {
       );
 
       // TODO: Could we use an AbortController to improve this? See eg. https://github.com/mcollina/hwp/pull/10
-      bufferedPromises.splice(0, bufferedPromises.length);
-      subIterators.splice(0, subIterators.length);
+      bufferedPromises.splice(0);
+      subIterators.splice(0);
 
       if (throwAnyError && hasError) {
         throw hasError;

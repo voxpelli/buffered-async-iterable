@@ -7,7 +7,6 @@ import sinonChai from 'sinon-chai';
 import {
   bufferedAsyncMap,
 } from '../index.js';
-
 import {
   yieldValuesOverTime,
 } from './utils.js';
