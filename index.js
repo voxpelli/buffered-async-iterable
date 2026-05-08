@@ -34,13 +34,14 @@ export async function * mergeIterables (input, { bufferSize } = {}) {
  * @template R
  * @param {AsyncIterable<T> | Iterable<T> | T[]} input
  * @param {(item: T, opts: { signal: AbortSignal }) => (Promise<R>|AsyncIterable<R>)} callback
- * @param {{ bufferSize?: number|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined }} [options]
+ * @param {{ bufferSize?: number|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined }} [options]
  * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]>, [Symbol.asyncDispose]: () => Promise<void> }}
  */
 export function bufferedAsyncMap (input, callback, options) {
   /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { bufferPromise: BufferPromise, fromSubIterator?: boolean, isSubIterator?: boolean, err?: unknown }>} BufferPromise */
   const {
     bufferSize = 6,
+    errors: errorsMode = 'fail-eventually',
     ordered = false,
     signal: externalSignal,
   } = options || {};
@@ -55,6 +56,7 @@ export function bufferedAsyncMap (input, callback, options) {
   if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');
   if (typeof bufferSize !== 'number') throw new TypeError('Expected bufferSize to be a number');
   if (externalSignal !== undefined && !(externalSignal instanceof AbortSignal)) throw new TypeError('Expected signal to be an AbortSignal');
+  if (errorsMode !== 'fail-eventually' && errorsMode !== 'fail-fast') throw new TypeError("Expected errors to be 'fail-eventually' or 'fail-fast'");
 
   /** @type {AsyncIterator<T, unknown>} */
   const asyncIterator = asyncIterable[Symbol.asyncIterator]();
@@ -319,7 +321,25 @@ export function bufferedAsyncMap (input, callback, options) {
       return { done: true, value: undefined };
     } else if (err || done) {
       if (err) {
-        capturedErrors.push(err instanceof Error ? err : new Error('Unknown error'));
+        const normalisedErr = err instanceof Error ? err : new Error('Unknown error');
+
+        // In fail-fast mode the first captured error short-circuits iteration:
+        // route it through the same abort machinery so the next .next() rejects
+        // with the original error and in-flight callbacks see signal.aborted=true.
+        if (errorsMode === 'fail-fast' && !abortReason) {
+          abortReason = { reason: normalisedErr, delivered: false };
+          if (!internalAC.signal.aborted) {
+            internalAC.abort(normalisedErr);
+          }
+          await markAsEnded();
+          if (abortReason && !abortReason.delivered) {
+            abortReason.delivered = true;
+            throw normalisedErr;
+          }
+          return { done: true, value: undefined };
+        }
+
+        capturedErrors.push(normalisedErr);
       }
 
       if (fromSubIterator || subIterators.length > 0) {
