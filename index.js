@@ -72,8 +72,8 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {boolean} */
   let isDone;
 
-  /** @type {Error|undefined} */
-  let hasError;
+  /** @type {Error[]} */
+  const capturedErrors = [];
 
   /**
    * @param {boolean} [throwAnyError]
@@ -97,8 +97,10 @@ export function bufferedAsyncMap (input, callback, options) {
       bufferedPromises.splice(0);
       subIterators.splice(0);
 
-      if (throwAnyError && hasError) {
-        throw hasError;
+      if (throwAnyError && capturedErrors.length > 0) {
+        throw capturedErrors.length === 1
+          ? capturedErrors[0]
+          : new AggregateError(capturedErrors, 'Multiple errors in bufferedAsyncMap');
       }
     }
 
@@ -106,7 +108,7 @@ export function bufferedAsyncMap (input, callback, options) {
   };
 
   const fillQueue = () => {
-    if (hasError || isDone) return;
+    if (capturedErrors.length > 0 || isDone) return;
 
     /** @type {AsyncIterator<R, unknown>|undefined} */
     let currentSubIterator;
@@ -240,8 +242,8 @@ export function bufferedAsyncMap (input, callback, options) {
     if (isDone) {
       return { done: true, value: undefined };
     } else if (err || done) {
-      if (err && !hasError) {
-        hasError = err instanceof Error ? err : new Error('Unknown error');
+      if (err) {
+        capturedErrors.push(err instanceof Error ? err : new Error('Unknown error'));
       }
 
       if (fromSubIterator || subIterators.length > 0) {
