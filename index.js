@@ -34,7 +34,7 @@ export async function * mergeIterables (input, { bufferSize } = {}) {
  * @template R
  * @param {AsyncIterable<T> | Iterable<T> | T[]} input
  * @param {(item: T, opts: { signal: AbortSignal }) => (Promise<R>|AsyncIterable<R>)} callback
- * @param {{ bufferSize?: number|undefined, ordered?: boolean|undefined }} [options]
+ * @param {{ bufferSize?: number|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined }} [options]
  * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]>, [Symbol.asyncDispose]: () => Promise<void> }}
  */
 export function bufferedAsyncMap (input, callback, options) {
@@ -42,6 +42,7 @@ export function bufferedAsyncMap (input, callback, options) {
   const {
     bufferSize = 6,
     ordered = false,
+    signal: externalSignal,
   } = options || {};
 
   /** @type {AsyncIterable<T>} */
@@ -53,6 +54,7 @@ export function bufferedAsyncMap (input, callback, options) {
   if (!isAsyncIterable(asyncIterable)) throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
   if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');
   if (typeof bufferSize !== 'number') throw new TypeError('Expected bufferSize to be a number');
+  if (externalSignal !== undefined && !(externalSignal instanceof AbortSignal)) throw new TypeError('Expected signal to be an AbortSignal');
 
   /** @type {AsyncIterator<T, unknown>} */
   const asyncIterator = asyncIterable[Symbol.asyncIterator]();
@@ -77,6 +79,27 @@ export function bufferedAsyncMap (input, callback, options) {
 
   // Internal controller; aborts on iterator close (return/throw/dispose/source-exhaustion-with-cleanup) so callbacks can fast-path on shutdown.
   const internalAC = new AbortController();
+
+  /** @type {{ reason: unknown, delivered: boolean } | undefined} */
+  let abortReason;
+
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      abortReason = { reason: externalSignal.reason, delivered: false };
+      internalAC.abort(externalSignal.reason);
+    } else {
+      externalSignal.addEventListener('abort', () => {
+        // If the iterator already closed via return()/throw()/dispose, abort is too late: no-op.
+        if (isDone) return;
+        if (!abortReason) {
+          abortReason = { reason: externalSignal.reason, delivered: false };
+        }
+        if (!internalAC.signal.aborted) {
+          internalAC.abort(externalSignal.reason);
+        }
+      }, { once: true });
+    }
+  }
 
   /**
    * @param {boolean} [throwAnyError]
@@ -115,7 +138,7 @@ export function bufferedAsyncMap (input, callback, options) {
   };
 
   const fillQueue = () => {
-    if (capturedErrors.length > 0 || isDone) return;
+    if (capturedErrors.length > 0 || isDone || abortReason) return;
 
     /** @type {AsyncIterator<R, unknown>|undefined} */
     let currentSubIterator;
@@ -225,15 +248,61 @@ export function bufferedAsyncMap (input, callback, options) {
     }
   };
 
+  // Sentinel returned from raceAbort() so a pending nextValue() wakes up when abort fires
+  // even with no buffered promise to resolve it.
+  const ABORT_SENTINEL = Symbol('abort');
+
+  /** @returns {Promise<typeof ABORT_SENTINEL>} */
+  const raceAbort = () => new Promise(resolve => {
+    if (internalAC.signal.aborted) {
+      resolve(ABORT_SENTINEL);
+    } else {
+      internalAC.signal.addEventListener('abort', () => resolve(ABORT_SENTINEL), { once: true });
+    }
+  });
+
+  /**
+   * @returns {{ done: true, value: undefined } | undefined}
+   */
+  const handleAbortIfPending = () => {
+    if (abortReason && !abortReason.delivered) {
+      abortReason.delivered = true;
+      throw abortReason.reason;
+    }
+    if (abortReason && abortReason.delivered) {
+      return { done: true, value: undefined };
+    }
+  };
+
   /** @type {AsyncIterator<R>["next"]} */
   const nextValue = async () => {
+    {
+      const earlyAbort = handleAbortIfPending();
+      if (earlyAbort) {
+        await markAsEnded();
+        return earlyAbort;
+      }
+    }
+
     const nextBufferedPromise = bufferedPromises[0];
 
     if (!nextBufferedPromise) return markAsEnded(true);
     if (isDone) return { done: true, value: undefined };
 
+    const raced = await Promise.race([
+      ordered ? nextBufferedPromise : Promise.race(bufferedPromises),
+      raceAbort(),
+    ]);
+
+    // Abort always wins over a buffered value that may have settled in the same tick.
+    if (raced === ABORT_SENTINEL || abortReason) {
+      const handled = handleAbortIfPending();
+      await markAsEnded();
+      return handled ?? { done: true, value: undefined };
+    }
+
     /** @type {Awaited<BufferPromise>} */
-    const resolvedPromise = await (ordered ? nextBufferedPromise : Promise.race(bufferedPromises));
+    const resolvedPromise = raced;
     arrayDeleteInPlace(bufferedPromises, resolvedPromise.bufferPromise);
 
     // Wait for some of the current promises to be finished
@@ -278,7 +347,12 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]>, [Symbol.asyncDispose]: () => Promise<void> }} */
   const resultAsyncIterableIterator = {
     async next () {
-      currentStep = currentStep ? currentStep.then(() => nextValue()) : nextValue();
+      // Chain via then(nextValue, nextValue) so a rejection on one .next() does
+      // not poison every subsequent call — the next call still reaches
+      // nextValue() which observes the post-rejection state machine.
+      currentStep = currentStep
+        ? currentStep.then(() => nextValue(), () => nextValue())
+        : nextValue();
       return currentStep;
     },
     // TODO: Accept an argument, as in the spec. Look into what happens if one call return() multiple times + look into if the value provided to return is the one returned forever after
