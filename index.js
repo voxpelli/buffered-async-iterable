@@ -1,6 +1,5 @@
 /* eslint-disable promise/prefer-await-to-then */
 
-// TODO: Get inspired by Matteos https://github.com/mcollina/hwp/blob/main/index.js, eg AbortController is nice?
 // TODO: Check docs here https://tc39.es/ecma262/#sec-operations-on-iterator-objects
 // TODO: Look into https://tc39.es/ecma262/#sec-iteratorclose / https://tc39.es/ecma262/#sec-asynciteratorclose
 // TODO: See "iteratorKind" in https://tc39.es/ecma262/#sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset – see how it loops and validates the returned values
@@ -125,7 +124,6 @@ export function bufferedAsyncMap (input, callback, options) {
           .map(item => item.return && item.return())
       );
 
-      // TODO: Could we use an AbortController to improve this? See eg. https://github.com/mcollina/hwp/pull/10
       bufferedPromises.splice(0);
       subIterators.splice(0);
 
