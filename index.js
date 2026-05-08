@@ -6,8 +6,8 @@
 // TODO: THERE'S ACTUALLY A "throw" method MENTION IN https://tc39.es/ecma262/#sec-generator-function-definitions-runtime-semantics-evaluation: "NOTE: Exceptions from the inner iterator throw method are propagated. Normal completions from an inner throw method are processed similarly to an inner next." THOUGH NOT SURE HOW TO TRIGGER IT IN PRACTICE, SEE yield.spec.js
 
 import { findLeastTargeted } from './lib/find-least-targeted.js';
-import { arrayDeleteInPlace, makeIterableAsync } from './lib/misc.js';
-import { isAsyncIterable, isIterable, isPartOfArray } from './lib/type-checks.js';
+import { arrayDeleteInPlace, makeIterableAsync, normalizeError } from './lib/misc.js';
+import { isAsyncIterable, isIterable, isObject, isPartOfArray } from './lib/type-checks.js';
 
 /**
  * @template T
@@ -159,10 +159,10 @@ export function bufferedAsyncMap (input, callback, options) {
     const bufferPromise = currentSubIterator
       ? Promise.resolve(currentSubIterator.next())
         .catch(err => ({
-          err: err instanceof Error ? err : new Error('Unknown subiterator error'),
+          err: normalizeError(err, 'Unknown subiterator error'),
         }))
         .then(async result => {
-          if (typeof result !== 'object') {
+          if (!isObject(result)) {
             throw new TypeError('Expected an object value');
           }
           if ('err' in result || result.done) {
@@ -184,10 +184,10 @@ export function bufferedAsyncMap (input, callback, options) {
         })
       : Promise.resolve(asyncIterator.next())
         .catch(err => ({
-          err: err instanceof Error ? err : new Error('Unknown iterator error'),
+          err: normalizeError(err, 'Unknown iterator error'),
         }))
         .then(async result => {
-          if (typeof result !== 'object') {
+          if (!isObject(result)) {
             throw new TypeError('Expected an object value');
           }
           if ('err' in result || result.done) {
@@ -221,7 +221,7 @@ export function bufferedAsyncMap (input, callback, options) {
             promiseValue = {
               bufferPromise,
               done: true,
-              err: err instanceof Error ? err : new Error('Unknown callback error'),
+              err: normalizeError(err, 'Unknown callback error'),
               value: undefined,
             };
           }
@@ -234,7 +234,7 @@ export function bufferedAsyncMap (input, callback, options) {
     if (ordered && currentSubIterator) {
       let i = 0;
 
-      while (promisesToSourceIteratorMap.get(/** @type {BufferPromise} */ (bufferedPromises[i])) === currentSubIterator) {
+      while (i < bufferedPromises.length && promisesToSourceIteratorMap.get(/** @type {BufferPromise} */ (bufferedPromises[i])) === currentSubIterator) {
         i += 1;
       }
 
@@ -319,7 +319,7 @@ export function bufferedAsyncMap (input, callback, options) {
       return { done: true, value: undefined };
     } else if (err || done) {
       if (err) {
-        const normalisedErr = err instanceof Error ? err : new Error('Unknown error');
+        const normalisedErr = normalizeError(err, 'Unknown error');
 
         // In fail-fast mode the first captured error short-circuits iteration:
         // route it through the same abort machinery so the next .next() rejects
