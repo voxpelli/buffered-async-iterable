@@ -15,7 +15,7 @@
   "author": "Pelle Wessman <pelle@kodfabrik.se> (http://kodfabrik.se/)",
   "license": "MIT",
   "engines": {
-    "node": ">=18.6.0"
+    "node": ">=22.0.0"
   },
   "type": "module",
   "exports": "./index.js",
@@ -51,7 +51,7 @@
     "@types/chai-as-promised": "^7.1.8",
     "@types/chai-quantifiers": "^1.0.4",
     "@types/mocha": "^10.0.8",
-    "@types/node": "^18.19.50",
+    "@types/node": "^22.0.0",
     "@types/sinon": "^17.0.3",
     "@types/sinon-chai": "^3.2.12",
     "@voxpelli/eslint-config": "^25.0.2",

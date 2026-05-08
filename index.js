@@ -35,7 +35,7 @@ export async function * mergeIterables (input, { bufferSize } = {}) {
  * @param {AsyncIterable<T> | Iterable<T> | T[]} input
  * @param {(item: T) => (Promise<R>|AsyncIterable<R>)} callback
  * @param {{ bufferSize?: number|undefined, ordered?: boolean|undefined }} [options]
- * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]> }}
+ * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]>, [Symbol.asyncDispose]: () => Promise<void> }}
  */
 export function bufferedAsyncMap (input, callback, options) {
   /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { bufferPromise: BufferPromise, fromSubIterator?: boolean, isSubIterator?: boolean, err?: unknown }>} BufferPromise */
@@ -268,7 +268,7 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {Promise<IteratorResult<R>>} */
   let currentStep;
 
-  /** @type {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]> }} */
+  /** @type {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]>, [Symbol.asyncDispose]: () => Promise<void> }} */
   const resultAsyncIterableIterator = {
     async next () {
       currentStep = currentStep ? currentStep.then(() => nextValue()) : nextValue();
@@ -277,6 +277,7 @@ export function bufferedAsyncMap (input, callback, options) {
     // TODO: Accept an argument, as in the spec. Look into what happens if one call return() multiple times + look into if the value provided to return is the one returned forever after
     'return': () => markAsEnded(),
     // TODO: Add "throw", see reference in https://tc39.es/ecma262/ ? And https://twitter.com/matteocollina/status/1392056117128306691
+    /** @type {NonNullable<AsyncIterableIterator<R>["throw"]>} */
     'throw': async (err) => {
       // TODO: Should remember the throw? And return a rejected promise always?
       await markAsEnded();
@@ -284,6 +285,9 @@ export function bufferedAsyncMap (input, callback, options) {
     },
 
     [Symbol.asyncIterator]: () => resultAsyncIterableIterator,
+    [Symbol.asyncDispose]: async () => {
+      await markAsEnded();
+    },
   };
 
   fillQueue();
