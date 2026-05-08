@@ -75,17 +75,95 @@ Iterates and applies the `callback` to up to `bufferSize` items from `input` yie
 
 #### Syntax
 
-`bufferedAsyncMap(input, callback[, { bufferSize=6, ordered=false }]) => AsyncIterableIterator`
+`bufferedAsyncMap(input, callback[, { bufferSize=6, ordered=false, signal, errors='fail-eventually' }]) => AsyncIterableIterator`
 
 #### Arguments
 
 * `input` – either an async iterable, an ordinare iterable or an array
-* `callback(item)` – should be either an async generator or an ordinary async function. Items from async generators are buffered in the main buffer and the buffer is refilled by the one that has least items in the current buffer (`input` is considered equal to sub iterators in this regard when refilling the buffer)
+* `callback(item, { signal })` – should be either an async generator or an ordinary async function. Items from async generators are buffered in the main buffer and the buffer is refilled by the one that has least items in the current buffer (`input` is considered equal to sub iterators in this regard when refilling the buffer). The second argument is an `{ signal: AbortSignal }` that aborts on cancellation — see [Cancellation](#cancellation).
 
 #### Options
 
 * `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultanoeus items that processed at once in the buffer.
-* `ordered` – _optional_ – defaults to `false`, when `true` the result will be returned in order instead of unordered
+* `ordered` – _optional_ – defaults to `false`, when `true` the result will be returned in order instead of unordered.
+* `signal` – _optional_ – an `AbortSignal`. When aborted, iteration stops pulling from the source, the next pending or freshly-called `iterator.next()` rejects with `signal.reason` exactly once, and all subsequent calls return `{ done: true, value: undefined }`. See [Cancellation](#cancellation).
+* `errors` – _optional_ – defaults to `'fail-eventually'`. Controls how errors from the callback or the source surface to the consumer. See [Errors](#errors).
+
+The returned iterator also implements `Symbol.asyncDispose`, so it can be used with `await using` for deterministic cleanup. See [Resource management](#resource-management).
+
+## Cancellation
+
+Pass an `AbortSignal` and abort it whenever you want to stop iteration:
+
+```javascript
+import { bufferedAsyncMap } from 'buffered-async-iterable';
+
+const ac = new AbortController();
+setTimeout(() => ac.abort(new Error('took too long')), 5000);
+
+try {
+  for await (const item of bufferedAsyncMap(source, async (item) => {
+    return await fetchItem(item);
+  }, { signal: ac.signal })) {
+    console.log(item);
+  }
+} catch (err) {
+  // err === ac.signal.reason
+}
+```
+
+Aborting cancels *consumption* of the source. In-flight callbacks continue running until they settle. To cancel network/IO inside your callback, forward the per-callback `signal` (the second argument) into `fetch`/`undici`/etc:
+
+```javascript
+bufferedAsyncMap(source, async (item, { signal }) => {
+  const res = await fetch(`/items/${item}`, { signal });
+  return res.json();
+}, { signal: ac.signal });
+```
+
+The per-callback `signal` is always present (even when no `options.signal` is passed) and aborts on iterator close (return / throw / dispose / source-exhaustion-with-cleanup), so callbacks can fast-path on shutdown.
+
+If `options.signal` is already aborted at construction time, the source is never read and the first `iterator.next()` rejects with `signal.reason`. External abort always wins over queued errors.
+
+## Errors
+
+There are two error modes:
+
+### `'fail-eventually'` (default)
+
+Iteration continues after errors. Captured errors are thrown when the iterator drains:
+
+* If exactly one error was captured, it is thrown directly (identity preserved).
+* If two or more errors were captured, they are wrapped in an [`AggregateError`](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) (in capture order).
+
+In-flight callbacks may still complete in the background after an error is captured. Wrap your callback in `try/catch` if you need per-item isolation.
+
+### `'fail-fast'`
+
+Mirrors `Promise.all` semantics: the first error from the callback or the source short-circuits iteration. The next `iterator.next()` rejects with the original error (no `AggregateError` wrapping); subsequent calls return `{ done: true }`. The source's `.next()` is not called again, the source's `.return()` is called once, and in-flight callbacks observe `signal.aborted === true` on their per-callback signal within one microtask.
+
+```javascript
+for await (const item of bufferedAsyncMap(source, fn, { errors: 'fail-fast' })) {
+  // first thrown error halts iteration immediately
+}
+```
+
+External abort always takes precedence over either error mode: if `options.signal` aborts while errors are queued, the consumer sees `signal.reason`, not the captured errors.
+
+## Resource management
+
+The returned iterator implements `Symbol.asyncDispose`, so it can be used with [`await using`](https://github.com/tc39/proposal-explicit-resource-management) for deterministic cleanup:
+
+```javascript
+{
+  await using iterator = bufferedAsyncMap(source, fn);
+  for await (const item of iterator) {
+    if (shouldStop(item)) break;
+  }
+} // source.return() runs here, regardless of how the block exited
+```
+
+`Symbol.asyncDispose` is aliased to `iterator.return()` and is idempotent. Native `await using` requires Node 22+ (or a transpiler).
 
 ### mergeIterables()
 

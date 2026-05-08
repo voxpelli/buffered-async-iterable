@@ -612,7 +612,8 @@ describe('bufferedAsyncMap() values', () => {
           throw new Error('Expected a rejection');
         },
         err => {
-          err.should.equal(rejectionError);
+          const captured = err instanceof AggregateError ? err.errors[0] : err;
+          captured.should.equal(rejectionError);
         }
       );
 

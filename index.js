@@ -1,6 +1,5 @@
 /* eslint-disable promise/prefer-await-to-then */
 
-// TODO: Get inspired by Matteos https://github.com/mcollina/hwp/blob/main/index.js, eg AbortController is nice?
 // TODO: Check docs here https://tc39.es/ecma262/#sec-operations-on-iterator-objects
 // TODO: Look into https://tc39.es/ecma262/#sec-iteratorclose / https://tc39.es/ecma262/#sec-asynciteratorclose
 // TODO: See "iteratorKind" in https://tc39.es/ecma262/#sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset – see how it loops and validates the returned values
@@ -33,15 +32,17 @@ export async function * mergeIterables (input, { bufferSize } = {}) {
  * @template T
  * @template R
  * @param {AsyncIterable<T> | Iterable<T> | T[]} input
- * @param {(item: T) => (Promise<R>|AsyncIterable<R>)} callback
- * @param {{ bufferSize?: number|undefined, ordered?: boolean|undefined }} [options]
- * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]> }}
+ * @param {(item: T, opts: { signal: AbortSignal }) => (Promise<R>|AsyncIterable<R>)} callback
+ * @param {{ bufferSize?: number|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined }} [options]
+ * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]>, [Symbol.asyncDispose]: () => Promise<void> }}
  */
 export function bufferedAsyncMap (input, callback, options) {
   /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { bufferPromise: BufferPromise, fromSubIterator?: boolean, isSubIterator?: boolean, err?: unknown }>} BufferPromise */
   const {
     bufferSize = 6,
+    errors: errorsMode = 'fail-eventually',
     ordered = false,
+    signal: externalSignal,
   } = options || {};
 
   /** @type {AsyncIterable<T>} */
@@ -53,6 +54,8 @@ export function bufferedAsyncMap (input, callback, options) {
   if (!isAsyncIterable(asyncIterable)) throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
   if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');
   if (typeof bufferSize !== 'number') throw new TypeError('Expected bufferSize to be a number');
+  if (externalSignal !== undefined && !(externalSignal instanceof AbortSignal)) throw new TypeError('Expected signal to be an AbortSignal');
+  if (errorsMode !== 'fail-eventually' && errorsMode !== 'fail-fast') throw new TypeError("Expected errors to be 'fail-eventually' or 'fail-fast'");
 
   /** @type {AsyncIterator<T, unknown>} */
   const asyncIterator = asyncIterable[Symbol.asyncIterator]();
@@ -72,8 +75,32 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {boolean} */
   let isDone;
 
-  /** @type {Error|undefined} */
-  let hasError;
+  /** @type {Error[]} */
+  const capturedErrors = [];
+
+  // Internal controller; aborts on iterator close (return/throw/dispose/source-exhaustion-with-cleanup) so callbacks can fast-path on shutdown.
+  const internalAC = new AbortController();
+
+  /** @type {{ reason: unknown, delivered: boolean } | undefined} */
+  let abortReason;
+
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      abortReason = { reason: externalSignal.reason, delivered: false };
+      internalAC.abort(externalSignal.reason);
+    } else {
+      externalSignal.addEventListener('abort', () => {
+        // If the iterator already closed via return()/throw()/dispose, abort is too late: no-op.
+        if (isDone) return;
+        if (!abortReason) {
+          abortReason = { reason: externalSignal.reason, delivered: false };
+        }
+        if (!internalAC.signal.aborted) {
+          internalAC.abort(externalSignal.reason);
+        }
+      }, { once: true });
+    }
+  }
 
   /**
    * @param {boolean} [throwAnyError]
@@ -82,6 +109,10 @@ export function bufferedAsyncMap (input, callback, options) {
   const markAsEnded = async (throwAnyError) => {
     if (!isDone) {
       isDone = true;
+
+      if (!internalAC.signal.aborted) {
+        internalAC.abort();
+      }
 
       // TODO: Errors from here, how to handle? allSettled() ensures they will be caught at least
       await Promise.allSettled(
@@ -93,12 +124,13 @@ export function bufferedAsyncMap (input, callback, options) {
           .map(item => item.return && item.return())
       );
 
-      // TODO: Could we use an AbortController to improve this? See eg. https://github.com/mcollina/hwp/pull/10
       bufferedPromises.splice(0);
       subIterators.splice(0);
 
-      if (throwAnyError && hasError) {
-        throw hasError;
+      if (throwAnyError && capturedErrors.length > 0) {
+        throw capturedErrors.length === 1
+          ? capturedErrors[0]
+          : new AggregateError(capturedErrors, 'Multiple errors in bufferedAsyncMap');
       }
     }
 
@@ -106,7 +138,7 @@ export function bufferedAsyncMap (input, callback, options) {
   };
 
   const fillQueue = () => {
-    if (hasError || isDone) return;
+    if (capturedErrors.length > 0 || isDone || abortReason) return;
 
     /** @type {AsyncIterator<R, unknown>|undefined} */
     let currentSubIterator;
@@ -171,7 +203,7 @@ export function bufferedAsyncMap (input, callback, options) {
           }
 
           // eslint-disable-next-line promise/no-callback-in-promise
-          const callbackResult = callback(result.value);
+          const callbackResult = callback(result.value, { signal: internalAC.signal });
           const isSubIterator = isAsyncIterable(callbackResult);
 
           /** @type {Awaited<BufferPromise>} */
@@ -216,15 +248,61 @@ export function bufferedAsyncMap (input, callback, options) {
     }
   };
 
+  // Sentinel returned from raceAbort() so a pending nextValue() wakes up when abort fires
+  // even with no buffered promise to resolve it.
+  const ABORT_SENTINEL = Symbol('abort');
+
+  /** @returns {Promise<typeof ABORT_SENTINEL>} */
+  const raceAbort = () => new Promise(resolve => {
+    if (internalAC.signal.aborted) {
+      resolve(ABORT_SENTINEL);
+    } else {
+      internalAC.signal.addEventListener('abort', () => resolve(ABORT_SENTINEL), { once: true });
+    }
+  });
+
+  /**
+   * @returns {{ done: true, value: undefined } | undefined}
+   */
+  const handleAbortIfPending = () => {
+    if (abortReason && !abortReason.delivered) {
+      abortReason.delivered = true;
+      throw abortReason.reason;
+    }
+    if (abortReason && abortReason.delivered) {
+      return { done: true, value: undefined };
+    }
+  };
+
   /** @type {AsyncIterator<R>["next"]} */
   const nextValue = async () => {
+    {
+      const earlyAbort = handleAbortIfPending();
+      if (earlyAbort) {
+        await markAsEnded();
+        return earlyAbort;
+      }
+    }
+
     const nextBufferedPromise = bufferedPromises[0];
 
     if (!nextBufferedPromise) return markAsEnded(true);
     if (isDone) return { done: true, value: undefined };
 
+    const raced = await Promise.race([
+      ordered ? nextBufferedPromise : Promise.race(bufferedPromises),
+      raceAbort(),
+    ]);
+
+    // Abort always wins over a buffered value that may have settled in the same tick.
+    if (raced === ABORT_SENTINEL || abortReason) {
+      const handled = handleAbortIfPending();
+      await markAsEnded();
+      return handled ?? { done: true, value: undefined };
+    }
+
     /** @type {Awaited<BufferPromise>} */
-    const resolvedPromise = await (ordered ? nextBufferedPromise : Promise.race(bufferedPromises));
+    const resolvedPromise = raced;
     arrayDeleteInPlace(bufferedPromises, resolvedPromise.bufferPromise);
 
     // Wait for some of the current promises to be finished
@@ -240,8 +318,26 @@ export function bufferedAsyncMap (input, callback, options) {
     if (isDone) {
       return { done: true, value: undefined };
     } else if (err || done) {
-      if (err && !hasError) {
-        hasError = err instanceof Error ? err : new Error('Unknown error');
+      if (err) {
+        const normalisedErr = err instanceof Error ? err : new Error('Unknown error');
+
+        // In fail-fast mode the first captured error short-circuits iteration:
+        // route it through the same abort machinery so the next .next() rejects
+        // with the original error and in-flight callbacks see signal.aborted=true.
+        if (errorsMode === 'fail-fast' && !abortReason) {
+          abortReason = { reason: normalisedErr, delivered: false };
+          if (!internalAC.signal.aborted) {
+            internalAC.abort(normalisedErr);
+          }
+          await markAsEnded();
+          if (abortReason && !abortReason.delivered) {
+            abortReason.delivered = true;
+            throw normalisedErr;
+          }
+          return { done: true, value: undefined };
+        }
+
+        capturedErrors.push(normalisedErr);
       }
 
       if (fromSubIterator || subIterators.length > 0) {
@@ -266,15 +362,21 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {Promise<IteratorResult<R>>} */
   let currentStep;
 
-  /** @type {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]> }} */
+  /** @type {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]>, [Symbol.asyncDispose]: () => Promise<void> }} */
   const resultAsyncIterableIterator = {
     async next () {
-      currentStep = currentStep ? currentStep.then(() => nextValue()) : nextValue();
+      // Chain via then(nextValue, nextValue) so a rejection on one .next() does
+      // not poison every subsequent call — the next call still reaches
+      // nextValue() which observes the post-rejection state machine.
+      currentStep = currentStep
+        ? currentStep.then(() => nextValue(), () => nextValue())
+        : nextValue();
       return currentStep;
     },
     // TODO: Accept an argument, as in the spec. Look into what happens if one call return() multiple times + look into if the value provided to return is the one returned forever after
     'return': () => markAsEnded(),
     // TODO: Add "throw", see reference in https://tc39.es/ecma262/ ? And https://twitter.com/matteocollina/status/1392056117128306691
+    /** @type {NonNullable<AsyncIterableIterator<R>["throw"]>} */
     'throw': async (err) => {
       // TODO: Should remember the throw? And return a rejected promise always?
       await markAsEnded();
@@ -282,6 +384,9 @@ export function bufferedAsyncMap (input, callback, options) {
     },
 
     [Symbol.asyncIterator]: () => resultAsyncIterableIterator,
+    [Symbol.asyncDispose]: async () => {
+      await markAsEnded();
+    },
   };
 
   fillQueue();
