@@ -33,7 +33,7 @@ export async function * mergeIterables (input, { bufferSize } = {}) {
  * @template T
  * @template R
  * @param {AsyncIterable<T> | Iterable<T> | T[]} input
- * @param {(item: T) => (Promise<R>|AsyncIterable<R>)} callback
+ * @param {(item: T, opts: { signal: AbortSignal }) => (Promise<R>|AsyncIterable<R>)} callback
  * @param {{ bufferSize?: number|undefined, ordered?: boolean|undefined }} [options]
  * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]>, [Symbol.asyncDispose]: () => Promise<void> }}
  */
@@ -75,6 +75,9 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {Error[]} */
   const capturedErrors = [];
 
+  // Internal controller; aborts on iterator close (return/throw/dispose/source-exhaustion-with-cleanup) so callbacks can fast-path on shutdown.
+  const internalAC = new AbortController();
+
   /**
    * @param {boolean} [throwAnyError]
    * @returns {Promise<IteratorReturnResult<undefined>>}
@@ -82,6 +85,10 @@ export function bufferedAsyncMap (input, callback, options) {
   const markAsEnded = async (throwAnyError) => {
     if (!isDone) {
       isDone = true;
+
+      if (!internalAC.signal.aborted) {
+        internalAC.abort();
+      }
 
       // TODO: Errors from here, how to handle? allSettled() ensures they will be caught at least
       await Promise.allSettled(
@@ -173,7 +180,7 @@ export function bufferedAsyncMap (input, callback, options) {
           }
 
           // eslint-disable-next-line promise/no-callback-in-promise
-          const callbackResult = callback(result.value);
+          const callbackResult = callback(result.value, { signal: internalAC.signal });
           const isSubIterator = isAsyncIterable(callbackResult);
 
           /** @type {Awaited<BufferPromise>} */
