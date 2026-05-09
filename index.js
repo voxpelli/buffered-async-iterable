@@ -7,7 +7,9 @@
 
 import { findLeastTargeted } from './lib/find-least-targeted.js';
 import { arrayDeleteInPlace, makeIterableAsync, normalizeError } from './lib/misc.js';
-import { isAsyncIterable, isIterable, isObject, isPartOfArray } from './lib/type-checks.js';
+import {
+  isAsyncIterable, isIterable, isObject, isPartOfArray,
+} from './lib/type-checks.js';
 
 /**
  * @template T
