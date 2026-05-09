@@ -36,7 +36,7 @@ describe('bufferedAsyncMap() AsyncInterface throw()', () => {
     sinon.restore();
   });
 
-  it('AC 6.1 + 6.2: throw(err) rejects with err and subsequent .next() returns done', async () => {
+  it('throw(err) rejects with err and subsequent .next() returns done', async () => {
     const errorToThrow = new Error('thrown');
 
     const iterator = bufferedAsyncMap(baseAsyncIterable, async (item) => item);
@@ -54,7 +54,7 @@ describe('bufferedAsyncMap() AsyncInterface throw()', () => {
     await after.should.eventually.deep.equal({ done: true, value: undefined });
   });
 
-  it('AC 6.2: throw(err) calls source.return() once', async () => {
+  it('throw(err) calls source.return() once', async () => {
     const errorToThrow = new Error('thrown');
     const source = yieldValuesOverTime(50, 100);
     const sourceIterator = source[Symbol.asyncIterator]();
@@ -76,7 +76,7 @@ describe('bufferedAsyncMap() AsyncInterface throw()', () => {
     returnSpy.should.have.been.calledOnce;
   });
 
-  it('AC 6.2: in-flight callbacks observe signal.aborted=true after throw()', async () => {
+  it('in-flight callbacks observe signal.aborted=true after throw()', async () => {
     const errorToThrow = new Error('thrown');
     /** @type {AbortSignal | undefined} */
     let captured;

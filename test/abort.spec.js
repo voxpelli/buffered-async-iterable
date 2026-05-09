@@ -44,7 +44,7 @@ describe('bufferedAsyncMap() options.signal', () => {
 
   // --- Validation ---
 
-  it('AC 4.1: throws TypeError when signal is not an AbortSignal', () => {
+  it('throws TypeError when signal is not an AbortSignal', () => {
     should.Throw(() => {
       bufferedAsyncMap(
         yieldValuesOverTime(1, 100),
@@ -55,7 +55,7 @@ describe('bufferedAsyncMap() options.signal', () => {
     }, TypeError, 'Expected signal to be an AbortSignal');
   });
 
-  it('AC 4.2: omitting signal behaves identically to commit 3 (no regression)', async () => {
+  it('omitting signal behaves identically to commit 3 (no regression)', async () => {
     /** @type {number[]} */
     const result = [];
     const iterator = bufferedAsyncMap(yieldValuesOverTime(3, 100), async (item) => item);
@@ -72,7 +72,7 @@ describe('bufferedAsyncMap() options.signal', () => {
 
   // --- Pre-aborted signal ---
 
-  it('AC 4.3 + 4.4 + 4.5: pre-aborted signal: source.next never called, first .next() rejects with reason, subsequent return done', async () => {
+  it('pre-aborted signal: source.next never called, first .next() rejects with reason, subsequent return done', async () => {
     const reason = new Error('Pre-aborted');
     const ac = new AbortController();
     ac.abort(reason);
@@ -97,7 +97,7 @@ describe('bufferedAsyncMap() options.signal', () => {
     await iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
   });
 
-  it('AC 4.6: return() after pre-abort resolves done without throwing', async () => {
+  it('return() after pre-abort resolves done without throwing', async () => {
     const ac = new AbortController();
     ac.abort(new Error('Pre-aborted'));
 
@@ -114,7 +114,7 @@ describe('bufferedAsyncMap() options.signal', () => {
 
   // --- Mid-iteration abort ---
 
-  it('AC 4.7 + 4.10: parked .next() rejects with signal.reason (identity preserved)', async () => {
+  it('parked .next() rejects with signal.reason (identity preserved)', async () => {
     const reason = { custom: 'reason-object' };
     const ac = new AbortController();
 
@@ -134,7 +134,7 @@ describe('bufferedAsyncMap() options.signal', () => {
     chai.expect(await parkedNext).to.deep.equal({ rejectedWith: reason });
   });
 
-  it('AC 4.8: fresh .next() after abort rejects with reason', async () => {
+  it('fresh .next() after abort rejects with reason', async () => {
     const reason = new Error('Aborted');
     const ac = new AbortController();
 
@@ -155,7 +155,7 @@ describe('bufferedAsyncMap() options.signal', () => {
     chai.expect(await next).to.deep.equal({ rejectedWith: reason });
   });
 
-  it('AC 4.9: exactly one .next() rejects with reason; subsequent calls return done', async () => {
+  it('exactly one .next() rejects with reason; subsequent calls return done', async () => {
     const reason = new Error('Once');
     const ac = new AbortController();
 
@@ -193,7 +193,7 @@ describe('bufferedAsyncMap() options.signal', () => {
     chai.expect(results[2]).to.deep.equal({ rejected: false, value: { done: true, value: undefined } });
   });
 
-  it('AC 4.11 + 4.12: source.next not called after abort; source.return called once', async () => {
+  it('source.next not called after abort; source.return called once', async () => {
     const ac = new AbortController();
 
     const source = yieldValuesOverTime(20, 100);
@@ -228,7 +228,7 @@ describe('bufferedAsyncMap() options.signal', () => {
     returnSpy.should.have.been.calledOnce;
   });
 
-  it('AC 4.13: in-flight callbacks observe signal.aborted=true after external abort', async () => {
+  it('in-flight callbacks observe signal.aborted=true after external abort', async () => {
     const ac = new AbortController();
     /** @type {AbortSignal | undefined} */
     let captured;
@@ -258,7 +258,7 @@ describe('bufferedAsyncMap() options.signal', () => {
 
   // --- Close races ---
 
-  it('AC 4.17: return() before abort makes subsequent .next() return done without throwing', async () => {
+  it('return() before abort makes subsequent .next() return done without throwing', async () => {
     const ac = new AbortController();
     const iterator = bufferedAsyncMap(
       yieldValuesOverTime(6, 100),
@@ -281,7 +281,7 @@ describe('bufferedAsyncMap() options.signal', () => {
     await final.should.eventually.deep.equal({ done: true, value: undefined });
   });
 
-  it('AC 4.18: return() and abort fired together: cleanup runs once, no double-throw', async () => {
+  it('return() and abort fired together: cleanup runs once, no double-throw', async () => {
     const ac = new AbortController();
 
     // 200 items so the source is not naturally exhausted between consuming
@@ -311,7 +311,7 @@ describe('bufferedAsyncMap() options.signal', () => {
     returnSpy.should.have.been.calledOnce;
   });
 
-  it('AC 4.19: throw(err) after abort delivered behaves like throw on a closed iterator', async () => {
+  it('throw(err) after abort delivered behaves like throw on a closed iterator', async () => {
     const ac = new AbortController();
     const reason = new Error('aborted');
     const tossed = new Error('post-abort throw');
@@ -339,7 +339,7 @@ describe('bufferedAsyncMap() options.signal', () => {
 
   // --- ordered:true coverage ---
 
-  it('AC 4.15: abort works in ordered:true mode', async () => {
+  it('abort works in ordered:true mode', async () => {
     const ac = new AbortController();
     const reason = new Error('ordered-abort');
 

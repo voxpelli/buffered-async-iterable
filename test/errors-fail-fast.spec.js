@@ -50,7 +50,7 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
 
   // --- Validation & default ---
 
-  it("AC 5.1: throws TypeError when errors is not 'fail-eventually'/'fail-fast'", () => {
+  it("throws TypeError when errors is not 'fail-eventually'/'fail-fast'", () => {
     should.Throw(() => {
       bufferedAsyncMap(
         fromArray([0, 1]),
@@ -61,7 +61,7 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
     }, TypeError, "Expected errors to be 'fail-eventually' or 'fail-fast'");
   });
 
-  it("AC 5.2: omitting errors option (or 'fail-eventually') keeps current AggregateError behaviour", async () => {
+  it("omitting errors option (or 'fail-eventually') keeps current AggregateError behaviour", async () => {
     const errA = new Error('A');
     const errB = new Error('B');
     const callback = sinon.stub()
@@ -85,7 +85,7 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
 
   // --- fail-fast semantics ---
 
-  it('AC 5.3: first callback error rejects next .next() with that error; subsequent calls return done', async () => {
+  it('first callback error rejects next .next() with that error; subsequent calls return done', async () => {
     const reason = new Error('cb-error');
     const callback = sinon.stub()
       .returnsArg(0)
@@ -122,7 +122,7 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
     }
   });
 
-  it('AC 5.4: source error fails fast', async () => {
+  it('source error fails fast', async () => {
     const sourceError = new Error('src-error');
 
     const iterator = bufferedAsyncMap(
@@ -146,7 +146,7 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
     chai.expect(caught).to.equal(sourceError);
   });
 
-  it('AC 5.5 + 5.6: source.next not called after first error; source.return called once', async () => {
+  it('source.next not called after first error; source.return called once', async () => {
     const reason = new Error('halt');
     const source = yieldValuesOverTime(50, 100);
     const sourceIterator = source[Symbol.asyncIterator]();
@@ -186,7 +186,7 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
     returnSpy.should.have.been.calledOnce;
   });
 
-  it('AC 5.7: in-flight callbacks observe signal.aborted=true after fail-fast error', async () => {
+  it('in-flight callbacks observe signal.aborted=true after fail-fast error', async () => {
     const reason = new Error('halt');
     /** @type {AbortSignal | undefined} */
     let captured;
@@ -236,7 +236,7 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
     chai.expect(captured?.aborted).to.equal(true);
   });
 
-  it('AC 5.8: rejected error is the original (not AggregateError)', async () => {
+  it('rejected error is the original (not AggregateError)', async () => {
     const reason = new Error('original');
     const callback = sinon.stub()
       .returnsArg(0)
@@ -258,7 +258,7 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
     chai.expect(caught).to.not.be.instanceOf(AggregateError);
   });
 
-  it('AC 5.9: fail-fast works in ordered:true mode', async () => {
+  it('fail-fast works in ordered:true mode', async () => {
     const reason = new Error('ordered-fail');
     const callback = sinon.stub()
       .returnsArg(0)
@@ -288,7 +288,7 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
 
   // --- Interaction with abort ---
 
-  it('AC 5.11: external abort wins over a fail-fast error not yet captured', async () => {
+  it('external abort wins over a fail-fast error not yet captured', async () => {
     const externalReason = new Error('external');
     const ac = new AbortController();
 
@@ -325,7 +325,7 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
     chai.expect(caught).to.equal(externalReason);
   });
 
-  it('AC 5.13: external abort wins over queued errors in fail-eventually mode', async () => {
+  it('external abort wins over queued errors in fail-eventually mode', async () => {
     const externalReason = new Error('external');
     const ac = new AbortController();
 

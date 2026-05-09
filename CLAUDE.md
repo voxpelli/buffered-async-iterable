@@ -29,7 +29,7 @@ The function returns a stateful `AsyncIterableIterator` with these closure varia
 - **`bufferedPromises[]`** — in-flight promises (size capped at `bufferSize`). Each is the `callback(item, {signal})` result wrapped to never reject (errors are caught into `{err}` envelopes).
 - **`subIterators[]`** — stack of nested iterators spawned when `callback` returns an `AsyncIterable<R>` (async-generator callbacks).
 - **`promisesToSourceIteratorMap`** — WeakMap tracking which iterator produced each buffer slot; consulted by `findLeastTargeted` (`lib/find-least-targeted.js`) for load-balancing.
-- **`internalAC`** — an `AbortController` minted per call. Its signal is **always** the second arg to `callback`, regardless of whether the consumer passed `options.signal`. It fires from `markAsEnded()` on iterator close, from `options.signal` aborting (linked via `addEventListener('abort', …)`), and from the first error in `errors: 'fail-fast'` mode. This is what lets in-flight callbacks fast-path on shutdown.
+- **`internalAbortController`** — an `AbortController` minted per call. Its signal is **always** the second arg to `callback`, regardless of whether the consumer passed `options.signal`. It fires from `markAsEnded()` on iterator close, from `options.signal` aborting (linked via `addEventListener('abort', …)`), and from the first error in `errors: 'fail-fast'` mode. This is what lets in-flight callbacks fast-path on shutdown.
 - **`abortReason: { reason, delivered: boolean } | undefined`** — drives the "reject the next `.next()` once with `signal.reason`, then `done:true` forever" contract. Set by external abort, pre-aborted signal, or first fail-fast error.
 - **`capturedErrors[]`** — accumulates errors in `'fail-eventually'` mode; on drain, throws the single error directly (identity-preserved) or wraps in `AggregateError` for ≥2.
 - **`isDone`** — set once by `markAsEnded()` to make all close paths idempotent.
@@ -38,9 +38,9 @@ The function returns a stateful `AsyncIterableIterator` with these closure varia
 
 `fillQueue()` is the **producer**: pulls from source up to `bufferSize`, dispatches via `callback(item, {signal})`, pushes the wrapped promise into `bufferedPromises`. In `ordered: true` mode it always feeds from `subIterators[0]`; in `ordered: false` it picks the least-targeted iterator via `findLeastTargeted` to prevent starvation.
 
-`nextValue()` is the **consumer**: in a single flat `Promise.race`, races `bufferedPromises[0]` (ordered) or all of `bufferedPromises` (unordered) against the shared `abortPromise`. `abortPromise` is created **once at construction** with a single `{ once: true }` listener on `internalAC.signal`, so listener count does not grow with consumed values. Abort always wins over a buffered value resolving in the same tick — the post-race code re-checks `abortReason` regardless of which entry won the race.
+`nextValue()` is the **consumer**: in a single flat `Promise.race`, races `bufferedPromises[0]` (ordered) or all of `bufferedPromises` (unordered) against the shared `abortPromise`. `abortPromise` is created **once at construction** with a single `{ once: true }` listener on `internalAbortController.signal`, so listener count does not grow with consumed values. Abort always wins over a buffered value resolving in the same tick — the post-race code re-checks `abortReason` regardless of which entry won the race.
 
-`markAsEnded()` is the **single cleanup path**: sets `isDone`, fires `internalAC.abort()`, calls `Promise.allSettled(...iterators.map(it => it.return()))`, clears buffers. Called from `return()`, `throw()`, `Symbol.asyncDispose`, source-exhaustion, and abort delivery. Idempotent via the `isDone` guard.
+`markAsEnded()` is the **single cleanup path**: sets `isDone`, fires `internalAbortController.abort()`, calls `Promise.allSettled(...iterators.map(it => it.return()))`, clears buffers. Called from `return()`, `throw()`, `Symbol.asyncDispose`, source-exhaustion, and abort delivery. Idempotent via the `isDone` guard.
 
 ### Iterator chaining via `currentStep`
 
@@ -62,8 +62,8 @@ The function returns a stateful `AsyncIterableIterator` with these closure varia
 ## Implementation invariants worth preserving
 
 - **Zero runtime dependencies.** `package.json` has no `dependencies` block; keep it that way unless a new feature genuinely cannot be implemented without one. The harden branch's `@voxpelli/typed-utils` import was reverted for this reason.
-- **One abort listener per call.** Do not re-add `addEventListener` on `internalAC.signal` inside hot paths (`nextValue`, `fillQueue`); reuse the shared `abortPromise`. The construction-time linkage is the only `addEventListener` allowed against `internalAC.signal` or `externalSignal`.
-- **`internalAC` is unconditional — do not lazify.** It is minted on every call regardless of whether `options.signal` or `errors: 'fail-fast'` are used. `iterator.return()` deliberately bypasses the `currentStep` chain (so it can run concurrently with a parked `next()`) and fires `markAsEnded()` → `internalAC.abort()`; that abort is what wakes the parked `nextValue()` via `abortPromise`. Tests `per-task-signal` AC 3.4 / 3.5 / 3.6 and `abort` AC 4.18 pin this in the no-options case, and the README / CLAUDE.md promise the per-callback `{signal}` is always present.
+- **One abort listener per call.** Do not re-add `addEventListener` on `internalAbortController.signal` inside hot paths (`nextValue`, `fillQueue`); reuse the shared `abortPromise`. The construction-time linkage is the only `addEventListener` allowed against `internalAbortController.signal` or `externalSignal`.
+- **`internalAbortController` is unconditional — do not lazify.** It is minted on every call regardless of whether `options.signal` or `errors: 'fail-fast'` are used. `iterator.return()` deliberately bypasses the `currentStep` chain (so it can run concurrently with a parked `next()`) and fires `markAsEnded()` → `internalAbortController.abort()`; that abort is what wakes the parked `nextValue()` via `abortPromise`. The per-callback signal tests (`test/per-task-signal.spec.js`) and the parallel-return+abort test (`test/abort.spec.js`) pin this in the no-options case, and the README / CLAUDE.md promise the per-callback `{signal}` is always present.
 
 ## Style notes
 

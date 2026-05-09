@@ -26,7 +26,7 @@ describe('bufferedAsyncMap() per-task AbortSignal', () => {
     sinon.restore();
   });
 
-  it('AC 3.1 + 3.2: invokes callback with (item, { signal }) where signal.aborted === false', async () => {
+  it('invokes callback with (item, { signal }) where signal.aborted === false', async () => {
     /** @type {Array<{ item: number, signalIsAbortSignal: boolean, abortedAtCall: boolean }>} */
     const observations = [];
 
@@ -59,7 +59,7 @@ describe('bufferedAsyncMap() per-task AbortSignal', () => {
     }
   });
 
-  it('AC 3.4: in-flight callbacks observe signal.aborted=true after iterator.return()', async () => {
+  it('in-flight callbacks observe signal.aborted=true after iterator.return()', async () => {
     /** @type {AbortSignal | undefined} */
     let capturedSignal;
 
@@ -82,7 +82,7 @@ describe('bufferedAsyncMap() per-task AbortSignal', () => {
     chai.expect(capturedSignal?.aborted).to.equal(true);
   });
 
-  it('AC 3.5: in-flight callbacks observe signal.aborted=true after iterator.throw()', async () => {
+  it('in-flight callbacks observe signal.aborted=true after iterator.throw()', async () => {
     /** @type {AbortSignal | undefined} */
     let capturedSignal;
 
@@ -110,7 +110,7 @@ describe('bufferedAsyncMap() per-task AbortSignal', () => {
     chai.expect(capturedSignal?.aborted).to.equal(true);
   });
 
-  it('AC 3.6: in-flight callbacks observe signal.aborted=true after Symbol.asyncDispose', async () => {
+  it('in-flight callbacks observe signal.aborted=true after Symbol.asyncDispose', async () => {
     /** @type {AbortSignal | undefined} */
     let capturedSignal;
 
@@ -131,7 +131,7 @@ describe('bufferedAsyncMap() per-task AbortSignal', () => {
     chai.expect(capturedSignal?.aborted).to.equal(true);
   });
 
-  it('AC 3.7: in-flight callbacks do NOT observe signal.aborted=true on natural source exhaustion', async () => {
+  it('in-flight callbacks do NOT observe signal.aborted=true on natural source exhaustion', async () => {
     /** @type {AbortSignal | undefined} */
     let lastSignal;
 
@@ -161,7 +161,7 @@ describe('bufferedAsyncMap() per-task AbortSignal', () => {
     result.should.have.length(2);
   });
 
-  it('AC 3.3: callbacks ignoring the second arg keep working unmodified', async () => {
+  it('callbacks ignoring the second arg keep working unmodified', async () => {
     /** @type {number[]} */
     const result = [];
 

@@ -90,11 +90,13 @@ export function bufferedAsyncMap (input, callback, options) {
   // Internal controller, minted unconditionally regardless of whether
   // options.signal or errors:'fail-fast' are used. The per-callback `signal`
   // contract (README "Cancellation" + CLAUDE.md) requires it: a `for await
-  // … break` desugars to iterator.return() → markAsEnded() → internalAC.abort(),
-  // which is what wakes a parked nextValue() and lets in-flight callbacks
-  // observe signal.aborted=true. Don't try to lazify this — tests
-  // per-task-signal AC 3.4/3.5/3.6 + abort AC 4.18 pin the no-options case.
-  const internalAC = new AbortController();
+  // … break` desugars to iterator.return() → markAsEnded() →
+  // internalAbortController.abort(), which is what wakes a parked
+  // nextValue() and lets in-flight callbacks observe signal.aborted=true.
+  // Don't try to lazify this — the per-callback signal tests in
+  // test/per-task-signal.spec.js (and test/abort.spec.js for the parallel
+  // return()+abort case) pin the no-options case.
+  const internalAbortController = new AbortController();
 
   /** @type {{ reason: unknown, delivered: boolean } | undefined} */
   let abortReason;
@@ -102,7 +104,7 @@ export function bufferedAsyncMap (input, callback, options) {
   if (externalSignal) {
     if (externalSignal.aborted) {
       abortReason = { reason: externalSignal.reason, delivered: false };
-      internalAC.abort(externalSignal.reason);
+      internalAbortController.abort(externalSignal.reason);
     } else {
       externalSignal.addEventListener('abort', () => {
         // If the iterator already closed via return()/throw()/dispose, abort is too late: no-op.
@@ -110,8 +112,8 @@ export function bufferedAsyncMap (input, callback, options) {
         if (!abortReason) {
           abortReason = { reason: externalSignal.reason, delivered: false };
         }
-        if (!internalAC.signal.aborted) {
-          internalAC.abort(externalSignal.reason);
+        if (!internalAbortController.signal.aborted) {
+          internalAbortController.abort(externalSignal.reason);
         }
       }, { once: true });
     }
@@ -126,14 +128,14 @@ export function bufferedAsyncMap (input, callback, options) {
   // regardless of how many values the consumer pulls. Resolves at most once;
   // post-resolution it short-circuits Promise.race for every subsequent pull,
   // which is exactly the "abort wins forever" contract.
-  // Pre-aborted external signals already ran internalAC.abort() above, so the
+  // Pre-aborted external signals already ran internalAbortController.abort() above, so the
   // synchronous-aborted check below resolves the promise immediately.
   /** @type {Promise<typeof ABORT_SENTINEL>} */
   const abortPromise = new Promise(resolve => {
-    if (internalAC.signal.aborted) {
+    if (internalAbortController.signal.aborted) {
       resolve(ABORT_SENTINEL);
     } else {
-      internalAC.signal.addEventListener(
+      internalAbortController.signal.addEventListener(
         'abort',
         () => resolve(ABORT_SENTINEL),
         { once: true }
@@ -144,7 +146,7 @@ export function bufferedAsyncMap (input, callback, options) {
   /**
    * Single cleanup path. Idempotent via `isDone`. Called from `return()`,
    * `throw()`, `Symbol.asyncDispose`, source exhaustion, and abort delivery.
-   * Always fires `internalAC.abort()` — this is what wakes a parked
+   * Always fires `internalAbortController.abort()` — this is what wakes a parked
    * nextValue() and signals in-flight callbacks via the per-task signal.
    *
    * @param {boolean} [throwAnyError]
@@ -154,8 +156,8 @@ export function bufferedAsyncMap (input, callback, options) {
     if (!isDone) {
       isDone = true;
 
-      if (!internalAC.signal.aborted) {
-        internalAC.abort();
+      if (!internalAbortController.signal.aborted) {
+        internalAbortController.abort();
       }
 
       // TODO: Errors from here, how to handle? allSettled() ensures they will be caught at least
@@ -251,7 +253,7 @@ export function bufferedAsyncMap (input, callback, options) {
           }
 
           // eslint-disable-next-line promise/no-callback-in-promise
-          const callbackResult = callback(result.value, { signal: internalAC.signal });
+          const callbackResult = callback(result.value, { signal: internalAbortController.signal });
           const isSubIterator = isAsyncIterable(callbackResult);
 
           /** @type {Awaited<BufferPromise>} */
@@ -377,8 +379,8 @@ export function bufferedAsyncMap (input, callback, options) {
         // with the original error and in-flight callbacks see signal.aborted=true.
         if (errorsMode === 'fail-fast' && !abortReason) {
           abortReason = { reason: normalizedErr, delivered: false };
-          if (!internalAC.signal.aborted) {
-            internalAC.abort(normalizedErr);
+          if (!internalAbortController.signal.aborted) {
+            internalAbortController.abort(normalizedErr);
           }
           await markAsEnded();
           if (abortReason && !abortReason.delivered) {
@@ -426,7 +428,7 @@ export function bufferedAsyncMap (input, callback, options) {
     },
     // TODO: Accept an argument, as in the spec. Look into what happens if one call return() multiple times + look into if the value provided to return is the one returned forever after
     // return() deliberately bypasses the currentStep chain: it calls
-    // markAsEnded() directly (and thus internalAC.abort()) so a parked
+    // markAsEnded() directly (and thus internalAbortController.abort()) so a parked
     // next() awaiting a buffered promise wakes up via abortPromise. This is
     // what lets `for await … break` work — break desugars to return() running
     // concurrently with the in-flight next().

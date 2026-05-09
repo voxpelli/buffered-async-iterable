@@ -26,7 +26,7 @@ describe('bufferedAsyncMap() Symbol.asyncDispose', () => {
     sinon.restore();
   });
 
-  it('AC 2.1: should expose Symbol.asyncDispose as a function returning a Promise', async () => {
+  it('should expose Symbol.asyncDispose as a function returning a Promise', async () => {
     const iterator = bufferedAsyncMap(yieldValuesOverTime(3, 100), async (item) => item);
 
     chai.expect(iterator[Symbol.asyncDispose]).to.be.a('function');
@@ -37,7 +37,7 @@ describe('bufferedAsyncMap() Symbol.asyncDispose', () => {
     await result;
   });
 
-  it('AC 2.2: dispose should run the same cleanup as return() (source.return called)', async () => {
+  it('dispose should run the same cleanup as return() (source.return called)', async () => {
     const source = yieldValuesOverTime(6, 100);
     const sourceIterator = source[Symbol.asyncIterator]();
     const returnSpy = sinon.spy(sourceIterator, 'return');
@@ -62,7 +62,7 @@ describe('bufferedAsyncMap() Symbol.asyncDispose', () => {
   // the runtime support for the syntax landed after Node 22.x, but the
   // semantics we promise (cleanup on scope exit via Symbol.asyncDispose) are
   // testable directly.
-  it('AC 2.3: should run cleanup on scope exit (await using desugared)', async () => {
+  it('should run cleanup on scope exit (await using desugared)', async () => {
     const source = yieldValuesOverTime(6, 100);
     const sourceIterator = source[Symbol.asyncIterator]();
     const returnSpy = sinon.spy(sourceIterator, 'return');
@@ -89,7 +89,7 @@ describe('bufferedAsyncMap() Symbol.asyncDispose', () => {
     returnSpy.should.have.been.calledOnce;
   });
 
-  it('AC 2.4: dispose should be idempotent after return()', async () => {
+  it('dispose should be idempotent after return()', async () => {
     const source = yieldValuesOverTime(6, 100);
     const sourceIterator = source[Symbol.asyncIterator]();
     const returnSpy = sinon.spy(sourceIterator, 'return');
