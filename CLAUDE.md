@@ -38,7 +38,7 @@ The function returns a stateful `AsyncIterableIterator` with these closure varia
 
 `fillQueue()` is the **producer**: pulls from source up to `bufferSize`, dispatches via `callback(item, {signal})`, pushes the wrapped promise into `bufferedPromises`. In `ordered: true` mode it always feeds from `subIterators[0]`; in `ordered: false` it picks the least-targeted iterator via `findLeastTargeted` to prevent starvation.
 
-`nextValue()` is the **consumer**: races `bufferedPromises[0]` (ordered) or `Promise.race(bufferedPromises)` (unordered) against an abort sentinel from `internalAC.signal`. Abort always wins over a buffered value resolving in the same tick — the post-race code re-checks `abortReason` regardless of which promise won the race.
+`nextValue()` is the **consumer**: in a single flat `Promise.race`, races `bufferedPromises[0]` (ordered) or all of `bufferedPromises` (unordered) against the shared `abortPromise`. `abortPromise` is created **once at construction** with a single `{ once: true }` listener on `internalAC.signal`, so listener count does not grow with consumed values. Abort always wins over a buffered value resolving in the same tick — the post-race code re-checks `abortReason` regardless of which entry won the race.
 
 `markAsEnded()` is the **single cleanup path**: sets `isDone`, fires `internalAC.abort()`, calls `Promise.allSettled(...iterators.map(it => it.return()))`, clears buffers. Called from `return()`, `throw()`, `Symbol.asyncDispose`, source-exhaustion, and abort delivery. Idempotent via the `isDone` guard.
 
@@ -58,6 +58,16 @@ The function returns a stateful `AsyncIterableIterator` with these closure varia
 - Aborts cancel **consumption**, not in-flight callback work. Promises cannot be cancelled — the library propagates the signal so user code can voluntarily exit; it does not race-and-discard. The README documents this explicitly.
 - `errors: 'fail-eventually'` (default) keeps the historical "drain then throw" semantics; `'fail-fast'` mirrors `Promise.all`. External abort always wins over queued/captured errors.
 - Existing one-arg callbacks (`async (item) => …`) keep working — JS ignores extra args, so the second-arg widening is non-breaking.
+
+## Implementation invariants worth preserving
+
+- **Zero runtime dependencies.** `package.json` has no `dependencies` block; keep it that way unless a new feature genuinely cannot be implemented without one. The harden branch's `@voxpelli/typed-utils` import was reverted for this reason.
+- **One abort listener per call.** Do not re-add `addEventListener` on `internalAC.signal` inside hot paths (`nextValue`, `fillQueue`); reuse the shared `abortPromise`. The construction-time linkage is the only `addEventListener` allowed against `internalAC.signal` or `externalSignal`.
+- **`internalAC` is unconditional — do not lazify.** It is minted on every call regardless of whether `options.signal` or `errors: 'fail-fast'` are used. `iterator.return()` deliberately bypasses the `currentStep` chain (so it can run concurrently with a parked `next()`) and fires `markAsEnded()` → `internalAC.abort()`; that abort is what wakes the parked `nextValue()` via `abortPromise`. Tests `per-task-signal` AC 3.4 / 3.5 / 3.6 and `abort` AC 4.18 pin this in the no-options case, and the README / CLAUDE.md promise the per-callback `{signal}` is always present.
+
+## Style notes
+
+- Helpers and exports use American spelling (`normalizeError`, `lib/misc.js`); local variables follow the helper they wrap (e.g. `normalizedErr`).
 
 ## Test conventions
 

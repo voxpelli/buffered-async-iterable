@@ -29,6 +29,13 @@ export async function * mergeIterables (input, { bufferSize } = {}) {
 }
 
 /**
+ * Iterates `input` concurrently, applying `callback` to each item with up to
+ * `bufferSize` calls in flight. The per-callback `signal` is **always**
+ * present (even when no `options.signal` is passed) and aborts on iterator
+ * close — `return()`, `throw()`, `Symbol.asyncDispose`, source exhaustion,
+ * external abort, or first error in `errors: 'fail-fast'` mode — so callbacks
+ * can fast-path on shutdown.
+ *
  * @template T
  * @template R
  * @param {AsyncIterable<T> | Iterable<T> | T[]} input
@@ -78,7 +85,13 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {Error[]} */
   const capturedErrors = [];
 
-  // Internal controller; aborts on iterator close (return/throw/dispose/source-exhaustion-with-cleanup) so callbacks can fast-path on shutdown.
+  // Internal controller, minted unconditionally regardless of whether
+  // options.signal or errors:'fail-fast' are used. The per-callback `signal`
+  // contract (README "Cancellation" + CLAUDE.md) requires it: a `for await
+  // … break` desugars to iterator.return() → markAsEnded() → internalAC.abort(),
+  // which is what wakes a parked nextValue() and lets in-flight callbacks
+  // observe signal.aborted=true. Don't try to lazify this — tests
+  // per-task-signal AC 3.4/3.5/3.6 + abort AC 4.18 pin the no-options case.
   const internalAC = new AbortController();
 
   /** @type {{ reason: unknown, delivered: boolean } | undefined} */
@@ -102,7 +115,36 @@ export function bufferedAsyncMap (input, callback, options) {
     }
   }
 
+  // Sentinel value distinguishing "abort fired" from any buffered promise's
+  // resolution in nextValue()'s Promise.race.
+  const ABORT_SENTINEL = Symbol('abort');
+
+  // Single shared promise used as the abort branch of nextValue()'s race.
+  // Created once here (not per nextValue call) so listener count stays at 1
+  // regardless of how many values the consumer pulls. Resolves at most once;
+  // post-resolution it short-circuits Promise.race for every subsequent pull,
+  // which is exactly the "abort wins forever" contract.
+  // Pre-aborted external signals already ran internalAC.abort() above, so the
+  // synchronous-aborted check below resolves the promise immediately.
+  /** @type {Promise<typeof ABORT_SENTINEL>} */
+  const abortPromise = new Promise(resolve => {
+    if (internalAC.signal.aborted) {
+      resolve(ABORT_SENTINEL);
+    } else {
+      internalAC.signal.addEventListener(
+        'abort',
+        () => resolve(ABORT_SENTINEL),
+        { once: true }
+      );
+    }
+  });
+
   /**
+   * Single cleanup path. Idempotent via `isDone`. Called from `return()`,
+   * `throw()`, `Symbol.asyncDispose`, source exhaustion, and abort delivery.
+   * Always fires `internalAC.abort()` — this is what wakes a parked
+   * nextValue() and signals in-flight callbacks via the per-task signal.
+   *
    * @param {boolean} [throwAnyError]
    * @returns {Promise<IteratorReturnResult<undefined>>}
    */
@@ -137,6 +179,10 @@ export function bufferedAsyncMap (input, callback, options) {
     return { done: true, value: undefined };
   };
 
+  // Producer: pulls from source up to bufferSize, dispatches via callback,
+  // pushes the wrapped promise into bufferedPromises. In `ordered: true`
+  // mode it always feeds from subIterators[0]; otherwise it picks the
+  // least-targeted iterator via findLeastTargeted to prevent starvation.
   const fillQueue = () => {
     if (capturedErrors.length > 0 || isDone || abortReason) return;
 
@@ -248,21 +294,15 @@ export function bufferedAsyncMap (input, callback, options) {
     }
   };
 
-  // Sentinel returned from raceAbort() so a pending nextValue() wakes up when abort fires
-  // even with no buffered promise to resolve it.
-  const ABORT_SENTINEL = Symbol('abort');
-
-  /** @returns {Promise<typeof ABORT_SENTINEL>} */
-  const raceAbort = () => new Promise(resolve => {
-    if (internalAC.signal.aborted) {
-      resolve(ABORT_SENTINEL);
-    } else {
-      internalAC.signal.addEventListener('abort', () => resolve(ABORT_SENTINEL), { once: true });
-    }
-  });
-
   /**
+   * Drives the "reject the next .next() once with abortReason.reason, then
+   * done:true forever" contract.
+   *
    * @returns {{ done: true, value: undefined } | undefined}
+   *   `undefined` when no abort is pending (caller continues normally);
+   *   `{ done: true, value: undefined }` when a previous call already
+   *   delivered the abort. Throws `abortReason.reason` when an abort is
+   *   pending fresh delivery.
    */
   const handleAbortIfPending = () => {
     if (abortReason && !abortReason.delivered) {
@@ -272,8 +312,14 @@ export function bufferedAsyncMap (input, callback, options) {
     if (abortReason && abortReason.delivered) {
       return { done: true, value: undefined };
     }
+    // Implicit `undefined` return = "no abort pending, caller continues normally".
+    // Lint rejects an explicit `return undefined` / `return` here.
   };
 
+  // Consumer: races buffered promises against the shared abortPromise.
+  // Abort always wins over a buffered value that may have settled in the
+  // same tick — the post-race code re-checks abortReason regardless of
+  // which entry won the race.
   /** @type {AsyncIterator<R>["next"]} */
   const nextValue = async () => {
     {
@@ -289,12 +335,15 @@ export function bufferedAsyncMap (input, callback, options) {
     if (!nextBufferedPromise) return markAsEnded(true);
     if (isDone) return { done: true, value: undefined };
 
-    const raced = await Promise.race([
-      ordered ? nextBufferedPromise : Promise.race(bufferedPromises),
-      raceAbort(),
-    ]);
+    // Single flat Promise.race: abortPromise is the last entry so a buffered
+    // value resolving in the same tick still gets re-checked against
+    // abortReason below.
+    const raced = await Promise.race(
+      ordered
+        ? [nextBufferedPromise, abortPromise]
+        : [...bufferedPromises, abortPromise]
+    );
 
-    // Abort always wins over a buffered value that may have settled in the same tick.
     if (raced === ABORT_SENTINEL || abortReason) {
       const handled = handleAbortIfPending();
       await markAsEnded();
@@ -319,25 +368,25 @@ export function bufferedAsyncMap (input, callback, options) {
       return { done: true, value: undefined };
     } else if (err || done) {
       if (err) {
-        const normalisedErr = normalizeError(err, 'Unknown error');
+        const normalizedErr = normalizeError(err, 'Unknown error');
 
         // In fail-fast mode the first captured error short-circuits iteration:
         // route it through the same abort machinery so the next .next() rejects
         // with the original error and in-flight callbacks see signal.aborted=true.
         if (errorsMode === 'fail-fast' && !abortReason) {
-          abortReason = { reason: normalisedErr, delivered: false };
+          abortReason = { reason: normalizedErr, delivered: false };
           if (!internalAC.signal.aborted) {
-            internalAC.abort(normalisedErr);
+            internalAC.abort(normalizedErr);
           }
           await markAsEnded();
           if (abortReason && !abortReason.delivered) {
             abortReason.delivered = true;
-            throw normalisedErr;
+            throw normalizedErr;
           }
           return { done: true, value: undefined };
         }
 
-        capturedErrors.push(normalisedErr);
+        capturedErrors.push(normalizedErr);
       }
 
       if (fromSubIterator || subIterators.length > 0) {
@@ -355,7 +404,7 @@ export function bufferedAsyncMap (input, callback, options) {
     } else {
       fillQueue();
 
-      return /** @type {{ value: R }} */ ({ value });
+      return /** @type {IteratorYieldResult<R>} */ ({ value });
     }
   };
 
@@ -374,6 +423,11 @@ export function bufferedAsyncMap (input, callback, options) {
       return currentStep;
     },
     // TODO: Accept an argument, as in the spec. Look into what happens if one call return() multiple times + look into if the value provided to return is the one returned forever after
+    // return() deliberately bypasses the currentStep chain: it calls
+    // markAsEnded() directly (and thus internalAC.abort()) so a parked
+    // next() awaiting a buffered promise wakes up via abortPromise. This is
+    // what lets `for await … break` work — break desugars to return() running
+    // concurrently with the in-flight next().
     'return': () => markAsEnded(),
     // TODO: Add "throw", see reference in https://tc39.es/ecma262/ ? And https://twitter.com/matteocollina/status/1392056117128306691
     /** @type {NonNullable<AsyncIterableIterator<R>["throw"]>} */
