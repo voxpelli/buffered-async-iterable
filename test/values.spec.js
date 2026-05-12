@@ -983,13 +983,17 @@ describe('bufferedAsyncMap() values', () => {
     });
 
     it('forwards ordered: true to drain inputs in source order', async () => {
+      // Asymmetric timing: the second source is ten times faster than the first.
+      // Under the default ordered:false this would interleave (second-* would
+      // arrive between first-0 and first-1); under ordered:true the first
+      // iterable is drained completely before any value from the second.
       // Create the promise first, then have it be fully executed using clock.runAllAsync()
       const promisedResult = (async () => {
         /** @type {string[]} */
         const rawResult = [];
 
         for await (const value of mergeIterables([
-          yieldValuesOverTimeWithPrefix(3, 100, 'first-'),
+          yieldValuesOverTimeWithPrefix(3, 1000, 'first-'),
           yieldValuesOverTimeWithPrefix(3, 100, 'second-'),
         ], { ordered: true })) {
           rawResult.push(value);

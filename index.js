@@ -28,11 +28,11 @@ async function * yieldIterable (item) {
  *
  * @template T
  * @param {Array<AsyncIterable<T> | Iterable<T> | T[]>} input
- * @param {{ bufferSize?: number|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined }} [options]
+ * @param {{ bufferSize?: number|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined }} [options]
  * @returns {AsyncIterable<T>}
  */
-export async function * mergeIterables (input, { bufferSize, ordered, signal, errors } = {}) {
-  yield * bufferedAsyncMap(input, yieldIterable, { bufferSize, ordered, signal, errors });
+export async function * mergeIterables (input, { bufferSize, errors, ordered, signal } = {}) {
+  yield * bufferedAsyncMap(input, yieldIterable, { bufferSize, errors, ordered, signal });
 }
 
 /**
