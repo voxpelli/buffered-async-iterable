@@ -9,6 +9,8 @@
 
 Buffered parallel processing of async iterables / generators.
 
+**Requirements**: Node.js ≥22.0.0 (native `Symbol.asyncDispose` is required).
+
 [![npm version](https://img.shields.io/npm/v/buffered-async-iterable.svg?style=flat)](https://www.npmjs.com/package/buffered-async-iterable)
 [![npm downloads](https://img.shields.io/npm/dm/buffered-async-iterable.svg?style=flat)](https://www.npmjs.com/package/buffered-async-iterable)
 [![Module type: ESM](https://img.shields.io/badge/module%20type-esm-brightgreen)](https://github.com/voxpelli/badges-cjs-esm)
@@ -79,12 +81,12 @@ Iterates and applies the `callback` to up to `bufferSize` items from `input` yie
 
 #### Arguments
 
-* `input` – either an async iterable, an ordinare iterable or an array
+* `input` – either an async iterable, an ordinary iterable or an array
 * `callback(item, { signal })` – should be either an async generator or an ordinary async function. Items from async generators are buffered in the main buffer and the buffer is refilled by the one that has least items in the current buffer (`input` is considered equal to sub iterators in this regard when refilling the buffer). The second argument is an `{ signal: AbortSignal }` that aborts on cancellation — see [Cancellation](#cancellation).
 
 #### Options
 
-* `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultanoeus items that processed at once in the buffer.
+* `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultaneous items processed at once in the buffer.
 * `ordered` – _optional_ – defaults to `false`, when `true` the result will be returned in order instead of unordered.
 * `signal` – _optional_ – an `AbortSignal`. When aborted, iteration stops pulling from the source, the next pending or freshly-called `iterator.next()` rejects with `signal.reason` exactly once, and all subsequent calls return `{ done: true, value: undefined }`. See [Cancellation](#cancellation).
 * `errors` – _optional_ – defaults to `'fail-eventually'`. Controls how errors from the callback or the source surface to the consumer. See [Errors](#errors).
@@ -121,7 +123,7 @@ bufferedAsyncMap(source, async (item, { signal }) => {
 }, { signal: ac.signal });
 ```
 
-The per-callback `signal` is always present (even when no `options.signal` is passed) and aborts on iterator close (return / throw / dispose / source-exhaustion-with-cleanup), so callbacks can fast-path on shutdown.
+The per-callback `signal` is always present (even when no `options.signal` is passed) and aborts on iterator close (return / throw / dispose / source-exhaustion-with-cleanup), so callbacks can fast-path on shutdown. Callbacks observe `signal.aborted === true` within one microtask of iterator close — they continue running (Promises are not cancellable) until they reach the next `await` of something signal-aware (`fetch`, `undici`, etc.) or until they voluntarily exit via a check on `signal.aborted`.
 
 If `options.signal` is already aborted at construction time, the source is never read and the first `iterator.next()` rejects with `signal.reason`. External abort always wins over queued errors.
 
@@ -167,19 +169,22 @@ The returned iterator implements `Symbol.asyncDispose`, so it can be used with [
 
 ### mergeIterables()
 
-Merges all given (async) iterables in parallel, returning the values as they resolve
+Merges all given (async) iterables in parallel, returning the values as they resolve. Thin wrapper over [`bufferedAsyncMap`](#bufferedasyncmap) — see that section for the full semantics of each option.
 
 #### Syntax
 
-`mergeIterables(input[, { bufferSize=6 }]) => AsyncIterableIterator`
+`mergeIterables(input[, { bufferSize=6, ordered=false, signal, errors='fail-eventually' }]) => AsyncIterableIterator`
 
 #### Arguments
 
-* `input` – an array of async iterables, ordinare iterables and/or arrays
+* `input` – an array of async iterables, ordinary iterables and/or arrays
 
 #### Options
 
-* `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultanoeus items that processed at once in the buffer.
+* `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultaneous items processed at once in the buffer.
+* `ordered` – _optional_ – defaults to `false`. When `false` (the default), values are interleaved as they resolve; when `true`, the merge preserves the input array order (drains the first iterable before pulling from the second, etc.).
+* `signal` – _optional_ – an `AbortSignal`. Aborts the merge. See [Cancellation](#cancellation).
+* `errors` – _optional_ – defaults to `'fail-eventually'`. See [Errors](#errors).
 
 ## Similar modules
 

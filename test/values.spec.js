@@ -674,7 +674,7 @@ describe('bufferedAsyncMap() values', () => {
         },
         err => {
           if (err instanceof TypeError) {
-            err.message.should.equal('Expected an object value');
+            err.message.should.equal('Expected source iterator next() result to be an object');
           } else {
             throw new TypeError('Expected a TypeError');
           }
@@ -710,7 +710,7 @@ describe('bufferedAsyncMap() values', () => {
         },
         err => {
           if (err instanceof TypeError) {
-            err.message.should.equal('Expected an object value');
+            err.message.should.equal('Expected sub-iterator next() result to be an object');
           } else {
             throw new TypeError('Expected a TypeError');
           }
@@ -923,6 +923,92 @@ describe('bufferedAsyncMap() values', () => {
         'first-5',
       ]);
       duration.should.equal(6300);
+    });
+
+    it('forwards options.signal to the underlying bufferedAsyncMap', async () => {
+      const reason = new Error('merge-aborted');
+      const ac = new AbortController();
+
+      const iterator = mergeIterables([
+        yieldValuesOverTimeWithPrefix(6, 100, 'a-'),
+        yieldValuesOverTimeWithPrefix(6, 100, 'b-'),
+      ], { signal: ac.signal })[Symbol.asyncIterator]();
+
+      const first = iterator.next();
+      await clock.runAllAsync();
+      await first;
+
+      ac.abort(reason);
+
+      const next = iterator.next().catch(err => ({ rejectedWith: err }));
+      await clock.runAllAsync();
+      chai.expect(await next).to.deep.equal({ rejectedWith: reason });
+    });
+
+    it("forwards errors: 'fail-fast' to surface the original rejection", async () => {
+      const sourceError = new Error('merge-fail-fast');
+
+      async function * throwingInput () {
+        yield 'b-0';
+        await promisableTimeout(100);
+        throw sourceError;
+      }
+
+      const iterator = mergeIterables([
+        yieldValuesOverTimeWithPrefix(6, 100, 'a-'),
+        throwingInput(),
+      ], { errors: 'fail-fast' })[Symbol.asyncIterator]();
+
+      /** @type {Array<{ rejected: boolean, value?: unknown }>} */
+      const results = [];
+
+      const flow = (async () => {
+        for (let i = 0; i < 6; i += 1) {
+          try {
+            const r = await iterator.next();
+            results.push({ rejected: false, value: r });
+            if (r.done) break;
+          } catch (err) {
+            results.push({ rejected: true, value: err });
+          }
+        }
+      })();
+
+      await clock.runAllAsync();
+      await flow;
+
+      const firstReject = results.findIndex(r => r.rejected);
+      chai.expect(firstReject).to.be.greaterThan(-1);
+      chai.expect(results[firstReject]?.value).to.equal(sourceError);
+    });
+
+    it('forwards ordered: true to drain inputs in source order', async () => {
+      // Create the promise first, then have it be fully executed using clock.runAllAsync()
+      const promisedResult = (async () => {
+        /** @type {string[]} */
+        const rawResult = [];
+
+        for await (const value of mergeIterables([
+          yieldValuesOverTimeWithPrefix(3, 100, 'first-'),
+          yieldValuesOverTimeWithPrefix(3, 100, 'second-'),
+        ], { ordered: true })) {
+          rawResult.push(value);
+        }
+
+        return rawResult;
+      })();
+
+      await clock.runAllAsync();
+      const result = await promisedResult;
+
+      result.should.deep.equal([
+        'first-0',
+        'first-1',
+        'first-2',
+        'second-0',
+        'second-1',
+        'second-2',
+      ]);
     });
   });
 });

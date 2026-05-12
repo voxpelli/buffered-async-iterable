@@ -21,13 +21,18 @@ async function * yieldIterable (item) {
 }
 
 /**
+ * Merge several async (or sync) iterables in parallel. Items are
+ * yielded as they become available. Thin wrapper over
+ * `bufferedAsyncMap` — see that function for the full semantics of
+ * each option.
+ *
  * @template T
  * @param {Array<AsyncIterable<T> | Iterable<T> | T[]>} input
- * @param {{ bufferSize?: number|undefined }} [options]
+ * @param {{ bufferSize?: number|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined }} [options]
  * @returns {AsyncIterable<T>}
  */
-export async function * mergeIterables (input, { bufferSize } = {}) {
-  yield * bufferedAsyncMap(input, yieldIterable, { bufferSize });
+export async function * mergeIterables (input, { bufferSize, ordered, signal, errors } = {}) {
+  yield * bufferedAsyncMap(input, yieldIterable, { bufferSize, ordered, signal, errors });
 }
 
 /**
@@ -213,7 +218,7 @@ export function bufferedAsyncMap (input, callback, options) {
         }))
         .then(async result => {
           if (!isObject(result)) {
-            throw new TypeError('Expected an object value');
+            throw new TypeError('Expected sub-iterator next() result to be an object');
           }
           if ('err' in result || result.done) {
             arrayDeleteInPlace(subIterators, currentSubIterator);
@@ -238,7 +243,7 @@ export function bufferedAsyncMap (input, callback, options) {
         }))
         .then(async result => {
           if (!isObject(result)) {
-            throw new TypeError('Expected an object value');
+            throw new TypeError('Expected source iterator next() result to be an object');
           }
           if ('err' in result || result.done) {
             mainReturnedDone = true;
