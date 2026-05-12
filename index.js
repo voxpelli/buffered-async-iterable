@@ -307,19 +307,19 @@ export function bufferedAsyncMap (input, callback, options) {
    * Drives the "reject the next .next() once with abortReason.reason, then
    * done:true forever" contract.
    *
-   * @returns {{ done: true, value: undefined } | undefined}
-   *   `undefined` when no abort is pending (caller continues normally);
-   *   `{ done: true, value: undefined }` when a previous call already
-   *   delivered the abort. Throws `abortReason.reason` when an abort is
-   *   pending fresh delivery.
+   * Returns a descriptor rather than throwing directly so the caller can
+   * run cleanup (markAsEnded) before propagating the reason. Returns
+   * `undefined` when no abort is pending — caller continues normally.
+   *
+   * @returns {{ kind: 'throw', reason: unknown } | { kind: 'done' } | undefined}
    */
   const handleAbortIfPending = () => {
     if (abortReason && !abortReason.delivered) {
       abortReason.delivered = true;
-      throw abortReason.reason;
+      return { kind: 'throw', reason: abortReason.reason };
     }
     if (abortReason && abortReason.delivered) {
-      return { done: true, value: undefined };
+      return { kind: 'done' };
     }
     // Implicit `undefined` return = "no abort pending, caller continues normally".
     // Lint rejects an explicit `return undefined` / `return` here.
@@ -335,7 +335,8 @@ export function bufferedAsyncMap (input, callback, options) {
       const earlyAbort = handleAbortIfPending();
       if (earlyAbort) {
         await markAsEnded();
-        return earlyAbort;
+        if (earlyAbort.kind === 'throw') throw earlyAbort.reason;
+        return { done: true, value: undefined };
       }
     }
 
@@ -356,7 +357,8 @@ export function bufferedAsyncMap (input, callback, options) {
     if (raced === ABORT_SENTINEL || abortReason) {
       const handled = handleAbortIfPending();
       await markAsEnded();
-      return handled ?? { done: true, value: undefined };
+      if (handled?.kind === 'throw') throw handled.reason;
+      return { done: true, value: undefined };
     }
 
     /** @type {Awaited<BufferPromise>} */

@@ -165,7 +165,7 @@ The returned iterator implements `Symbol.asyncDispose`, so it can be used with [
 } // source.return() runs here, regardless of how the block exited
 ```
 
-`Symbol.asyncDispose` is aliased to `iterator.return()` and is idempotent. Native `await using` requires Node 22+ (or a transpiler).
+`Symbol.asyncDispose` is equivalent to calling `iterator.return()` for cleanup and is idempotent. Native `await using` requires Node 22+ (or a transpiler).
 
 ### mergeIterables()
 

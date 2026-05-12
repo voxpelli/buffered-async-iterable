@@ -220,6 +220,11 @@ describe('bufferedAsyncMap() options.signal', () => {
     const r = await next;
     should.exist(r);
 
+    // After the first rejecting .next() resolves, markAsEnded must have
+    // already run: source.return is called as part of the abort-delivery
+    // path, not deferred to the next consumer pull.
+    returnSpy.should.have.been.calledOnce;
+
     // Drain any further calls (should be none).
     await iterator.next();
     await clock.runAllAsync();
