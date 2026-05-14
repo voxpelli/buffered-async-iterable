@@ -29,6 +29,7 @@
     "index.d.ts.map"
   ],
   "scripts": {
+    "bench": "node --expose-gc --allow-natives-syntax benchmark/index.js",
     "build": "run-s build:*",
     "build:0": "run-s clean",
     "build:1-declaration": "tsc -p declaration.tsconfig.json",
@@ -37,7 +38,7 @@
     "check:knip": "knip",
     "check:lint": "eslint --report-unused-disable-directives .",
     "check:tsc": "tsc",
-    "check:type-coverage": "type-coverage --detail --strict --at-least 95 --ignore-files 'test/*.spec.js'",
+    "check:type-coverage": "type-coverage --detail --strict --at-least 95 --ignore-files 'test/*.spec.js' --ignore-files 'benchmark/**/*.js'",
     "clean": "run-p clean:*",
     "clean:declarations": "rm -rf $(find . -maxdepth 2 -type f -name '*.d.ts*')",
     "prepare": "husky",
@@ -63,6 +64,7 @@
     "husky": "^9.1.6",
     "installed-check": "^9.3.0",
     "knip": "^5.30.2",
+    "mitata": "^1.0.34",
     "mocha": "^10.7.3",
     "npm-run-all2": "^6.2.2",
     "sinon": "^19.0.2",

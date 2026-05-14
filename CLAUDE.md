@@ -11,8 +11,9 @@ The project is pure ESM JavaScript with **types written in JSDoc** (no TypeScrip
 - `npx mocha test/<name>.spec.js` — run a single spec file.
 - `npx mocha test/<name>.spec.js -g "<pattern>"` — filter to specific `it()` blocks within a file.
 - `npm run build` — clean and emit `.d.ts` declarations.
+- `npm run bench` — run the mitata benchmark suite (see "Benchmarks" below).
 
-Type-coverage is enforced at **≥95% strict** (excluding `test/*.spec.js`). Lint is `@voxpelli/eslint-config` (neostandard). Knip's "unused devDependency" findings are treated as errors by `npm test`.
+Type-coverage is enforced at **≥95% strict** (excluding `test/*.spec.js` and `benchmark/**/*.js`). Lint is `@voxpelli/eslint-config` (neostandard). Knip's "unused devDependency" findings are treated as errors by `npm test`. `benchmark/index.js` is the knip entry point for the benchmark dir; `benchmark/*.js` is still tsc-checked (it's in `tsconfig.json`'s `include`) but excluded from `.d.ts` emit and type-coverage.
 
 Commits must follow Conventional Commits (validated by the `commit-msg` husky hook via `validate-conventional-commit`); `release-please` cuts releases automatically from `main`, so `feat:` bumps minor and `fix:` bumps patch.
 
@@ -82,3 +83,9 @@ await flow;
 Inline `for await` blocks **without** the IIFE wrapper will deadlock under fake timers when the source uses real `setTimeout`. Test helpers in `test/utils.js` (`yieldValuesOverTime`, `nestedYieldValuesOverTime`, `promisableTimeout`) are the source of truth — reuse them.
 
 For testing rejections, prefer the `.catch(err => ({ rejectedWith: err }))` envelope pattern (used across `test/abort.spec.js` and `test/errors-fail-fast.spec.js`) over chai-as-promised's `should.be.rejectedWith` when asserting identity-equality on non-Error reasons.
+
+## Benchmarks
+
+`npm run bench` runs the [mitata](https://github.com/evanwashere/mitata) suite in `benchmark/` (`node --expose-gc --allow-natives-syntax`). One `group()` per major design decision: library-overhead tax, always-on abort wiring cost, ordered vs unordered dispatch, `bufferSize` scaling, nested sub-iterators, and the `mergeIterables` wrapper. They exist to catch performance regressions when the state machine changes — re-run before/after any change to `fillQueue`, `nextValue`, or the abort wiring.
+
+The non-negotiable rule, enforced by `benchmark/fixtures.js`: **benchmark fixtures never use timers.** `asyncRange` yields on the microtask queue with no artificial delay, so the numbers reflect the library's per-item bookkeeping overhead and not simulated I/O. A `setTimeout`-based source would make every benchmark measure the event loop instead. `do_not_optimize` wraps the drained result so the JIT cannot eliminate the loop; mitata handles warmup and flags suspicious (dead-code-eliminated) results with a `!`. Numbers are only comparable within a single run on the same machine — there is no committed baseline to diff against; trust the *relative* `summary()` output, not absolute times.
