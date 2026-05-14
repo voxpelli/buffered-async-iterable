@@ -1,10 +1,5 @@
 /* eslint-disable promise/prefer-await-to-then */
 
-// TODO: Check docs here https://tc39.es/ecma262/#sec-operations-on-iterator-objects
-// TODO: Look into https://tc39.es/ecma262/#sec-iteratorclose / https://tc39.es/ecma262/#sec-asynciteratorclose
-// TODO: See "iteratorKind" in https://tc39.es/ecma262/#sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset – see how it loops and validates the returned values
-// TODO: THERE'S ACTUALLY A "throw" method MENTION IN https://tc39.es/ecma262/#sec-generator-function-definitions-runtime-semantics-evaluation: "NOTE: Exceptions from the inner iterator throw method are propagated. Normal completions from an inner throw method are processed similarly to an inner next." THOUGH NOT SURE HOW TO TRIGGER IT IN PRACTICE, SEE yield.spec.js
-
 import { findLeastTargeted } from './lib/find-least-targeted.js';
 import { arrayDeleteInPlace, makeIterableAsync, normalizeError } from './lib/misc.js';
 import {
@@ -167,7 +162,9 @@ export function bufferedAsyncMap (input, callback, options) {
         internalAbortController.abort();
       }
 
-      // TODO: Errors from here, how to handle? allSettled() ensures they will be caught at least
+      // Source .return() rejections are intentionally swallowed: allSettled
+      // keeps cleanup going even if one source's return() rejects, so a broken
+      // cleanup can't mask the consumer-facing error or leave buffers uncleared.
       await Promise.allSettled(
         [
           // Ensure the main iterators are completed
@@ -463,7 +460,9 @@ export function bufferedAsyncMap (input, callback, options) {
     'return': () => markAsEnded(),
     /** @type {NonNullable<AsyncIterableIterator<R>["throw"]>} */
     'throw': async (err) => {
-      // TODO: Should remember the throw? And return a rejected promise always?
+      // Spec-correct as-is: throw(err) rejects once, markAsEnded() closes the
+      // iterator, and subsequent .next() returns { done: true } — no need to
+      // "remember" the throw or reject forever. Pinned by test/throw.spec.js.
       await markAsEnded();
       throw err;
     },

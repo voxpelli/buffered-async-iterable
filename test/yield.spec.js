@@ -96,8 +96,10 @@ describe('The built in "yield *" functionality', () => {
     }
 
     asyncIterator.next.should.have.been.calledTwice;
+    // Native `yield *` does not call the inner iterator's .return() when the
+    // inner .next() rejects — the delegation is already completing abruptly,
+    // so there is nothing to close. .throw() likewise isn't called here.
     asyncIterator.return.should.not.have.been.called;
-    // TODO: I thougt it should have been?
     asyncIterator.throw.should.not.have.been.called;
 
     await mainIterator[Symbol.asyncIterator]().next().should.eventually.deep.equal({ done: true, value: undefined });
