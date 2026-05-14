@@ -762,6 +762,66 @@ describe('bufferedAsyncMap() values', () => {
     await promisedResult;
   });
 
+  it('should surface a malformed async iterable from the callback (fail-eventually)', async () => {
+    const malformedError = new Error('bad iterable');
+
+    /** @returns {AsyncIterable<string>} */
+    const malformedIterable = () => ({
+      [Symbol.asyncIterator]: () => {
+        throw malformedError;
+      },
+    });
+
+    // Create the promise first, then have it be fully executed using clock.runAllAsync()
+    const promisedResult = (async () => {
+      /** @type {string[]} */
+      const result = [];
+
+      for await (const value of bufferedAsyncMap(baseAsyncIterable, malformedIterable)) {
+        result.push(value);
+      }
+
+      return result;
+    })()
+      .then(
+        () => {
+          throw new Error('Expected a rejection');
+        },
+        err => ({ rejectedWith: err })
+      );
+
+    await clock.runAllAsync();
+    const outcome = await promisedResult;
+
+    const captured = outcome.rejectedWith instanceof AggregateError
+      ? outcome.rejectedWith.errors[0]
+      : outcome.rejectedWith;
+    captured.should.equal(malformedError);
+  });
+
+  it('should surface a malformed async iterable from the callback (fail-fast)', async () => {
+    const malformedError = new Error('bad iterable');
+
+    /** @returns {AsyncIterable<string>} */
+    const malformedIterable = () => ({
+      [Symbol.asyncIterator]: () => {
+        throw malformedError;
+      },
+    });
+
+    const iterator = bufferedAsyncMap(
+      baseAsyncIterable,
+      malformedIterable,
+      { errors: 'fail-fast' }
+    )[Symbol.asyncIterator]();
+
+    const rejected = iterator.next().catch(err => ({ rejectedWith: err }));
+    await clock.runAllAsync();
+    const outcome = await rejected;
+
+    outcome.should.deep.equal({ rejectedWith: malformedError });
+  });
+
   it('should give back pressure', async () => {
     baseAsyncIterable = yieldValuesOverTime(100, (i) => i % 2 === 1 ? 2000 : 100);
     const baseAsyncIterator = baseAsyncIterable[Symbol.asyncIterator]();

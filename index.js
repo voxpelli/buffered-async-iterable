@@ -332,6 +332,39 @@ export function bufferedAsyncMap (input, callback, options) {
     // Lint rejects an explicit `return undefined` / `return` here.
   };
 
+  /**
+   * Routes a stream error — from the source, the callback, or a malformed
+   * sub-iterable — through the configured error mode. In `fail-fast` mode the
+   * first error short-circuits iteration via the abort machinery: this either
+   * throws the reason or returns the terminal `{ done: true }`. In
+   * `fail-eventually` mode it captures the error and returns `undefined`, so
+   * the caller keeps draining.
+   *
+   * @param {Error} normalizedErr
+   * @returns {Promise<{ done: true, value: undefined } | undefined>}
+   */
+  const handleStreamError = async (normalizedErr) => {
+    // In fail-fast mode the first captured error short-circuits iteration:
+    // route it through the same abort machinery so the next .next() rejects
+    // with the original error and in-flight callbacks see signal.aborted=true.
+    if (errorsMode === 'fail-fast' && !abortReason) {
+      abortReason = { reason: normalizedErr, delivered: false };
+      if (!internalAbortController.signal.aborted) {
+        internalAbortController.abort(normalizedErr);
+      }
+      await markAsEnded();
+      if (abortReason && !abortReason.delivered) {
+        abortReason.delivered = true;
+        throw normalizedErr;
+      }
+      return { done: true, value: undefined };
+    }
+
+    // fail-eventually: capture and fall through — implicit `undefined` return
+    // tells the caller to keep draining. Lint rejects an explicit `return`.
+    capturedErrors.push(normalizedErr);
+  };
+
   // Consumer: races buffered promises against a fresh per-pull park promise.
   // Abort always wins over a buffered value that may have settled in the
   // same tick — the post-race code re-checks abortReason regardless of
@@ -392,32 +425,11 @@ export function bufferedAsyncMap (input, callback, options) {
       value,
     } = resolvedPromise;
 
-    // We are mandated by the spec to always do this return if the iterator is done
-    if (isDone) {
-      return { done: true, value: undefined };
-    } else if (err || done) {
-      if (err) {
-        const normalizedErr = normalizeError(err, 'Unknown error');
-
-        // In fail-fast mode the first captured error short-circuits iteration:
-        // route it through the same abort machinery so the next .next() rejects
-        // with the original error and in-flight callbacks see signal.aborted=true.
-        if (errorsMode === 'fail-fast' && !abortReason) {
-          abortReason = { reason: normalizedErr, delivered: false };
-          if (!internalAbortController.signal.aborted) {
-            internalAbortController.abort(normalizedErr);
-          }
-          await markAsEnded();
-          if (abortReason && !abortReason.delivered) {
-            abortReason.delivered = true;
-            throw normalizedErr;
-          }
-          return { done: true, value: undefined };
-        }
-
-        capturedErrors.push(normalizedErr);
-      }
-
+    // Refill if a sub-iterator is in play, then either close on drain or
+    // recurse for the next value. Shared by the error and the
+    // malformed-sub-iterable paths.
+    /** @returns {Promise<IteratorResult<R>>} */
+    const drainOrContinue = () => {
       if (fromSubIterator || subIterators.length > 0) {
         fillQueue();
       }
@@ -425,9 +437,34 @@ export function bufferedAsyncMap (input, callback, options) {
       return bufferedPromises.length === 0
         ? markAsEnded(true)
         : nextValue();
+    };
+
+    // We are mandated by the spec to always do this return if the iterator is done
+    if (isDone) {
+      return { done: true, value: undefined };
+    } else if (err || done) {
+      if (err) {
+        const handled = await handleStreamError(normalizeError(err, 'Unknown error'));
+        if (handled) return handled;
+      }
+
+      return drainOrContinue();
     } else if (isSubIterator && isAsyncIterable(value)) {
-      // TODO: Handle possible error here? Or too obscure?
-      subIterators.unshift(value[Symbol.asyncIterator]());
+      /** @type {AsyncIterator<R>} */
+      let subIterator;
+
+      try {
+        subIterator = value[Symbol.asyncIterator]();
+      } catch (subIterableErr) {
+        // The callback returned a malformed async iterable — the
+        // Symbol.asyncIterator property exists but invoking it threw.
+        // Surface it like any other stream error.
+        const handled = await handleStreamError(normalizeError(subIterableErr, 'Unknown sub-iterator error'));
+        if (handled) return handled;
+        return drainOrContinue();
+      }
+
+      subIterators.unshift(subIterator);
       fillQueue();
       return nextValue();
     } else {
