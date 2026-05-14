@@ -57,6 +57,57 @@ describe('bufferedAsyncMap() AsyncInterface return()', () => {
     await nextAfterReturn.should.eventually.deep.equal({ done: true, value: undefined });
   });
 
+  it('should resolve return(value) to { done: true, value } per the iterator protocol', async () => {
+    const iterator = bufferedAsyncMap(baseAsyncIterable, async (item) => item);
+
+    await iterator.next().should.eventually.deep.equal({ value: 0 });
+
+    // return(value) reflects the passed argument...
+    const firstReturn = iterator.return('sentinel');
+    await clock.runAllAsync();
+    await firstReturn.should.eventually.deep.equal({ done: true, value: 'sentinel' });
+
+    // ...and each subsequent call reflects its own argument (not "remembered").
+    const secondReturn = iterator.return('other');
+    await clock.runAllAsync();
+    await secondReturn.should.eventually.deep.equal({ done: true, value: 'other' });
+
+    // A no-argument return() still resolves to { done: true, value: undefined }.
+    const bareReturn = iterator.return();
+    await clock.runAllAsync();
+    await bareReturn.should.eventually.deep.equal({ done: true, value: undefined });
+  });
+
+  it('should await a thenable return(value) argument', async () => {
+    const iterator = bufferedAsyncMap(baseAsyncIterable, async (item) => item);
+
+    const returnValue = iterator.return(Promise.resolve('awaited'));
+    await clock.runAllAsync();
+
+    await returnValue.should.eventually.deep.equal({ done: true, value: 'awaited' });
+  });
+
+  it('should call the source iterator return() only once across repeated return() calls', async () => {
+    const source = yieldValuesOverTime(count, (i) => i % 2 === 1 ? 2000 : 100);
+    const sourceIterator = source[Symbol.asyncIterator]();
+    const returnSpy = sinon.spy(sourceIterator, 'return');
+
+    const iterator = bufferedAsyncMap(
+      { [Symbol.asyncIterator]: () => sourceIterator },
+      async (item) => item
+    );
+
+    await iterator.next().should.eventually.deep.equal({ value: 0 });
+
+    const first = iterator.return('a');
+    const second = iterator.return('b');
+    await clock.runAllAsync();
+
+    await first.should.eventually.deep.equal({ done: true, value: 'a' });
+    await second.should.eventually.deep.equal({ done: true, value: 'b' });
+    returnSpy.should.have.been.calledOnce;
+  });
+
   it('should be called when a loop breaks', async () => {
     const iterator = bufferedAsyncMap(baseAsyncIterable, async (item) => item, { bufferSize: 3 });
     const returnSpy = sinon.spy(iterator, 'return');

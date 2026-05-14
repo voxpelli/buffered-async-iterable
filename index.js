@@ -151,10 +151,15 @@ export function bufferedAsyncMap (input, callback, options) {
    * Always fires `internalAbortController.abort()` — this is what wakes a parked
    * nextValue() and signals in-flight callbacks via the per-task signal.
    *
+   * The cleanup body runs once; the resolved result still reflects *this*
+   * call's `value` (so `return(v)` is spec-correct even after the iterator
+   * has already closed).
+   *
    * @param {boolean} [throwAnyError]
-   * @returns {Promise<IteratorReturnResult<undefined>>}
+   * @param {R} [value]
+   * @returns {Promise<IteratorResult<R>>}
    */
-  const markAsEnded = async (throwAnyError) => {
+  const markAsEnded = async (throwAnyError, value) => {
     if (!isDone) {
       isDone = true;
 
@@ -184,7 +189,7 @@ export function bufferedAsyncMap (input, callback, options) {
       }
     }
 
-    return { done: true, value: undefined };
+    return { done: true, value };
   };
 
   // Producer: pulls from source up to bufferSize, dispatches via callback,
@@ -488,13 +493,15 @@ export function bufferedAsyncMap (input, callback, options) {
         : nextValue();
       return currentStep;
     },
-    // TODO: Accept an argument, as in the spec. Look into what happens if one call return() multiple times + look into if the value provided to return is the one returned forever after
     // return() deliberately bypasses the currentStep chain: it calls
     // markAsEnded() directly (and thus internalAbortController.abort()) so a parked
     // next() awaiting a buffered promise wakes up via its per-pull park. This is
     // what lets `for await … break` work — break desugars to return() running
     // concurrently with the in-flight next().
-    'return': () => markAsEnded(),
+    // `value` is awaited (matching AsyncGenerator.prototype.return) so a
+    // thenable argument never lands in the IteratorResult's value field;
+    // cleanup runs once but each call's result reflects its own argument.
+    'return': async (value) => markAsEnded(false, await value),
     /** @type {NonNullable<AsyncIterableIterator<R>["throw"]>} */
     'throw': async (err) => {
       // Spec-correct as-is: throw(err) rejects once, markAsEnded() closes the
