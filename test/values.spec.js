@@ -649,6 +649,47 @@ describe('bufferedAsyncMap() values', () => {
     );
   });
 
+  it('should normalize a non-Error rejection from the callback into an Error', async () => {
+    baseAsyncIterable = yieldValuesOverTime(count, (i) => i % 2 === 1 ? 2000 : 100);
+
+    let callCount = 0;
+    /**
+     * @param {number} item
+     * @returns {Promise<number>}
+     */
+    const callback = async (item) => {
+      callCount += 1;
+      if (callCount === 2) {
+        // Reject with a non-Error value — exercises normalizeError's fallback.
+        // eslint-disable-next-line no-throw-literal
+        throw 'a plain string rejection';
+      }
+      return item;
+    };
+
+    /** @type {number[]} */
+    const drained = [];
+
+    // Create the promise first, then have it be fully executed using clock.runAllAsync()
+    const promisedResult = (async () => {
+      for await (const value of bufferedAsyncMap(baseAsyncIterable, callback)) {
+        drained.push(value);
+      }
+    })()
+      .then(
+        () => {
+          throw new Error('Expected a rejection');
+        },
+        err => ({ rejectedWith: err })
+      );
+
+    await clock.runAllAsync();
+    const outcome = await promisedResult;
+
+    outcome.rejectedWith.should.be.an.instanceOf(Error);
+    outcome.rejectedWith.message.should.equal('Unknown callback error');
+  });
+
   it('should throw TypeError on non-object value from AsyncIterator interface', async () => {
     const {
       asyncIterable,

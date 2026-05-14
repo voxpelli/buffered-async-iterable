@@ -287,6 +287,11 @@ export function bufferedAsyncMap (input, callback, options) {
     promisesToSourceIteratorMap.set(bufferPromise, currentSubIterator || asyncIterator);
 
     if (ordered && currentSubIterator) {
+      // Insert after any buffer slots already produced by this sub-iterator so
+      // its values stay contiguous and in order. In practice consumption is
+      // 1-to-1 with production in ordered mode, so the buffer never holds a
+      // second slot from the same sub-iterator at insert time and the loop
+      // body below stays unentered — it is kept as a guard for that invariant.
       let i = 0;
 
       while (i < bufferedPromises.length && promisesToSourceIteratorMap.get(/** @type {BufferPromise} */ (bufferedPromises[i])) === currentSubIterator) {
@@ -440,7 +445,6 @@ export function bufferedAsyncMap (input, callback, options) {
     // what lets `for await … break` work — break desugars to return() running
     // concurrently with the in-flight next().
     'return': () => markAsEnded(),
-    // TODO: Add "throw", see reference in https://tc39.es/ecma262/ ? And https://twitter.com/matteocollina/status/1392056117128306691
     /** @type {NonNullable<AsyncIterableIterator<R>["throw"]>} */
     'throw': async (err) => {
       // TODO: Should remember the throw? And return a rejected promise always?
