@@ -19,6 +19,20 @@ export async function * asyncRange (count) {
 }
 
 /**
+ * Sync iterable yielding integers `0 .. count - 1`. Exercises the
+ * `isIterable` → `makeIterableAsync` branch — no async-generator fixture
+ * reaches it.
+ *
+ * @param {number} count
+ * @returns {Generator<number>}
+ */
+export function * syncRange (count) {
+  for (let i = 0; i < count; i++) {
+    yield i;
+  }
+}
+
+/**
  * Minimal-work async callback — isolates the library's per-item dispatch
  * overhead from the callback's own cost.
  *
@@ -26,6 +40,17 @@ export async function * asyncRange (count) {
  * @returns {Promise<number>}
  */
 export const identity = async (item) => item;
+
+/**
+ * Callback that always rejects — drives the `fail-fast` short-circuit and the
+ * `fail-eventually` `AggregateError` accumulation paths.
+ *
+ * @param {number} item
+ * @returns {Promise<never>}
+ */
+export const rejectingCallback = async (item) => {
+  throw new Error('benchmark rejection ' + item);
+};
 
 /**
  * Async-generator callback: each input item fans out into 4 values. Exercises

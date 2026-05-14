@@ -186,6 +186,16 @@ Merges all given (async) iterables in parallel, returning the values as they res
 * `signal` – _optional_ – an `AbortSignal`. Aborts the merge. See [Cancellation](#cancellation).
 * `errors` – _optional_ – defaults to `'fail-eventually'`. See [Errors](#errors).
 
+## Performance
+
+`npm run bench` runs a [mitata](https://github.com/evanwashere/mitata) suite covering the main design decisions. The findings:
+
+* **There is a per-item buffering tax.** Routing values through `bufferedAsyncMap` costs roughly **30–50× a bare `for await` loop** when the per-item work is synchronous-ish. The library pays for itself when the callback is genuinely async / IO-bound and benefits from prefetching up to `bufferSize` items in parallel — for trivial synchronous transforms, a plain loop wins.
+* **`bufferSize` is a throughput/overhead trade-off.** Larger buffers keep more work in flight but cost more per pull (the internal `Promise.race` grows with the buffer — going from `bufferSize: 1` to `64` is ~7× more per-item overhead). The default of `6` is a reasonable midpoint.
+* **The optional machinery is effectively free.** Passing `options.signal`, choosing an `errors` mode, feeding a sync iterable or array instead of an async generator, and using `mergeIterables` instead of a direct call all measure within a few percent of the base case.
+
+These ratios are *indicative of the shape of the cost* — measured on the maintainer's machine, not a benchmark report. `npm run bench` reproduces them locally; see `CLAUDE.md` for the methodology.
+
 ## Similar modules
 
 * [`hwp`](https://github.com/mcollina/hwp) – similar module by [@mcollina](https://github.com/mcollina)
