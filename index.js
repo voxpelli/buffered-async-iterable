@@ -190,16 +190,19 @@ export function bufferedAsyncMap (input, callback, options) {
 
   // Producer: pulls from source up to bufferSize, dispatches via callback,
   // pushes the wrapped promise into bufferedPromises. In `ordered: true`
-  // mode it always feeds from subIterators[0]; otherwise it picks the
-  // least-targeted iterator via findLeastTargeted to prevent starvation.
+  // mode it always feeds from subIterators[0]; in `ordered: false` mode it
+  // picks the least-targeted iterator via findLeastTargeted to prevent
+  // starvation — but only once a sub-iterator actually exists, since with
+  // none there is nothing to balance and the main iterator is the only
+  // source.
   const fillQueue = () => {
     if (capturedErrors.length > 0 || isDone || abortReason) return;
 
     /** @type {AsyncIterator<R, unknown>|undefined} */
     let currentSubIterator;
 
-    if (ordered) {
-      currentSubIterator = subIterators[0];
+    if (ordered || subIterators.length === 0) {
+      currentSubIterator = ordered ? subIterators[0] : undefined;
     } else {
       const iterator = findLeastTargeted(
         mainReturnedDone ? subIterators : [...subIterators, asyncIterator],
@@ -333,8 +336,9 @@ export function bufferedAsyncMap (input, callback, options) {
   // Consumer: races buffered promises against the shared abortPromise.
   // Abort always wins over a buffered value that may have settled in the
   // same tick — the post-race code re-checks abortReason regardless of
-  // which entry won the race.
-  /** @type {AsyncIterator<R>["next"]} */
+  // which entry won the race. Typed as a plain zero-arg thunk (it never
+  // reads an argument) so it can be passed straight to currentStep.then().
+  /** @type {() => Promise<IteratorResult<R>>} */
   const nextValue = async () => {
     {
       const earlyAbort = handleAbortIfPending();
@@ -434,7 +438,7 @@ export function bufferedAsyncMap (input, callback, options) {
       // not poison every subsequent call — the next call still reaches
       // nextValue() which observes the post-rejection state machine.
       currentStep = currentStep
-        ? currentStep.then(() => nextValue(), () => nextValue())
+        ? currentStep.then(nextValue, nextValue)
         : nextValue();
       return currentStep;
     },
