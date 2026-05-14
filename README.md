@@ -190,11 +190,20 @@ Merges all given (async) iterables in parallel, returning the values as they res
 
 `npm run bench` runs a [mitata](https://github.com/evanwashere/mitata) suite covering the main design decisions. The findings:
 
-* **There is a per-item buffering tax.** Routing values through `bufferedAsyncMap` costs roughly **30–50× a bare `for await` loop** when the per-item work is synchronous-ish. The library pays for itself when the callback is genuinely async / IO-bound and benefits from prefetching up to `bufferSize` items in parallel — for trivial synchronous transforms, a plain loop wins.
-* **`bufferSize` is a throughput/overhead trade-off.** Larger buffers keep more work in flight but cost more per pull (the internal `Promise.race` grows with the buffer — going from `bufferSize: 1` to `64` is ~7× more per-item overhead). The default of `6` is a reasonable midpoint.
+* **There is a per-item buffering tax.** Routing values through `bufferedAsyncMap` still costs more than a bare `for await` loop — roughly **20–25×** on synchronous-ish work. The library pays for itself when the callback is genuinely async / IO-bound and benefits from prefetching up to `bufferSize` items in parallel — for trivial synchronous transforms, a plain loop wins.
+* **`bufferSize` is a throughput/overhead trade-off.** Larger buffers keep more work in flight but cost more per pull (the internal `Promise.race` grows with the buffer). The default of `6` is a reasonable midpoint.
 * **The optional machinery is effectively free.** Passing `options.signal`, choosing an `errors` mode, feeding a sync iterable or array instead of an async generator, and using `mergeIterables` instead of a direct call all measure within a few percent of the base case.
 
-These ratios are *indicative of the shape of the cost* — measured on the maintainer's machine, not a benchmark report. `npm run bench` reproduces them locally; see `CLAUDE.md` for the methodology.
+### Changes vs. earlier 2.0.0 pre-release builds
+
+Two optimisations during the 2.0.0 cycle, each guarded by the benchmark suite:
+
+* **Skip the load-balancer when there are no sub-iterators.** `fillQueue` no longer runs the `findLeastTargeted` load-balancer (a `Map` allocation + a per-item scan) on the common path where the callback returns plain values — it only runs once a nested async-generator callback actually creates a sub-iterator. ~10–15% faster throughput.
+* **Per-pull abort "park" instead of a long-lived race promise.** `nextValue` previously raced every pull against a single abort promise that never settled until the iterator closed — which left a `Promise` reaction record per item ([nodejs/node#51452](https://github.com/nodejs/node/issues/51452)), a real memory-retention issue on long-lived/unbounded streams. It now races a fresh, collectable per-pull "park" instead. This both removes the retention (≈0 vs ≈530 bytes/item on an unbounded stream — see `test/memory.spec.js`) and, by keeping the live-object set small during iteration, cuts GC pressure enough for a further ~20–40% throughput gain.
+
+Net: throughput is **~25–45% faster** than the first 2.0.0 pre-release across the buffered-map, ordered/unordered, `bufferSize`, input-shape and `mergeIterables` benchmarks, with no regression in the abort/error paths and the long-stream memory retention eliminated.
+
+These ratios are *indicative of the shape of the cost* — measured on the maintainer's machine, not a benchmark report. `npm run bench` reproduces them locally; `npm run bench:json` captures a JSON snapshot for before/after diffing. See `CLAUDE.md` for the methodology.
 
 ## Similar modules
 

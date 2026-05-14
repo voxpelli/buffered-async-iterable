@@ -128,25 +128,27 @@ export function bufferedAsyncMap (input, callback, options) {
   // resolution in nextValue()'s Promise.race.
   const ABORT_SENTINEL = Symbol('abort');
 
-  // Single shared promise used as the abort branch of nextValue()'s race.
-  // Created once here (not per nextValue call) so listener count stays at 1
-  // regardless of how many values the consumer pulls. Resolves at most once;
-  // post-resolution it short-circuits Promise.race for every subsequent pull,
-  // which is exactly the "abort wins forever" contract.
-  // Pre-aborted external signals already ran internalAbortController.abort() above, so the
-  // synchronous-aborted check below resolves the promise immediately.
-  /** @type {Promise<typeof ABORT_SENTINEL>} */
-  const abortPromise = new Promise(resolve => {
-    if (internalAbortController.signal.aborted) {
-      resolve(ABORT_SENTINEL);
-    } else {
-      internalAbortController.signal.addEventListener(
-        'abort',
-        () => resolve(ABORT_SENTINEL),
-        { once: true }
-      );
-    }
-  });
+  // Per-pull "park": nextValue() creates a fresh deferred each pull and races
+  // it alongside the buffered promises, so an abort can wake a parked pull
+  // even when no buffered promise will ever settle. It is deliberately NOT a
+  // single long-lived promise — racing the same never-settling promise on
+  // every pull leaves a PromiseReaction on it per item, which accumulates
+  // until it finally settles at iterator close (the documented
+  // nodejs/node#51452 retention pattern). Per-pull parks are collectable, so
+  // nothing accumulates. The single construction-time listener below resolves
+  // whichever park is currently waiting (read at fire time via the mutable
+  // `currentPark`); internalAbortController aborts at most once, so one
+  // listener suffices. If the signal is already aborted (pre-aborted external
+  // signal) the listener never fires — fine, because handleAbortIfPending()
+  // short-circuits nextValue() via `abortReason` before it reaches the race.
+  /** @type {{ resolve: (value: typeof ABORT_SENTINEL) => void } | undefined} */
+  let currentPark;
+
+  internalAbortController.signal.addEventListener(
+    'abort',
+    () => currentPark?.resolve(ABORT_SENTINEL),
+    { once: true }
+  );
 
   /**
    * Single cleanup path. Idempotent via `isDone`. Called from `return()`,
@@ -333,7 +335,7 @@ export function bufferedAsyncMap (input, callback, options) {
     // Lint rejects an explicit `return undefined` / `return` here.
   };
 
-  // Consumer: races buffered promises against the shared abortPromise.
+  // Consumer: races buffered promises against a fresh per-pull park promise.
   // Abort always wins over a buffered value that may have settled in the
   // same tick — the post-race code re-checks abortReason regardless of
   // which entry won the race. Typed as a plain zero-arg thunk (it never
@@ -354,14 +356,24 @@ export function bufferedAsyncMap (input, callback, options) {
     if (!nextBufferedPromise) return markAsEnded(true);
     if (isDone) return { done: true, value: undefined };
 
-    // Single flat Promise.race: abortPromise is the last entry so a buffered
-    // value resolving in the same tick still gets re-checked against
-    // abortReason below.
+    // Fresh per-pull park: the executor runs synchronously, so currentPark is
+    // set before the race below. parkPromise is the last entry in the race so
+    // a buffered value resolving in the same tick still gets re-checked
+    // against abortReason afterwards. The park is cleared once the race
+    // settles, so the construction-time abort listener becomes a no-op
+    // between pulls.
+    /** @type {Promise<typeof ABORT_SENTINEL>} */
+    const parkPromise = new Promise(resolve => {
+      currentPark = { resolve };
+    });
+
     const raced = await Promise.race(
       ordered
-        ? [nextBufferedPromise, abortPromise]
-        : [...bufferedPromises, abortPromise]
+        ? [nextBufferedPromise, parkPromise]
+        : [...bufferedPromises, parkPromise]
     );
+
+    currentPark = undefined;
 
     if (raced === ABORT_SENTINEL || abortReason) {
       const handled = handleAbortIfPending();
@@ -445,7 +457,7 @@ export function bufferedAsyncMap (input, callback, options) {
     // TODO: Accept an argument, as in the spec. Look into what happens if one call return() multiple times + look into if the value provided to return is the one returned forever after
     // return() deliberately bypasses the currentStep chain: it calls
     // markAsEnded() directly (and thus internalAbortController.abort()) so a parked
-    // next() awaiting a buffered promise wakes up via abortPromise. This is
+    // next() awaiting a buffered promise wakes up via its per-pull park. This is
     // what lets `for await … break` work — break desugars to return() running
     // concurrently with the in-flight next().
     'return': () => markAsEnded(),
