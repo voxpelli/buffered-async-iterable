@@ -37,11 +37,13 @@ The function returns a stateful `AsyncIterableIterator` with these closure varia
 
 ### Two pull/dispatch loops
 
-`fillQueue()` is the **producer**: pulls from source up to `bufferSize`, dispatches via `callback(item, {signal})`, pushes the wrapped promise into `bufferedPromises`. In `ordered: true` mode it always feeds from `subIterators[0]`; in `ordered: false` it picks the least-targeted iterator via `findLeastTargeted` to prevent starvation.
+`fillQueue()` is the **producer**: pulls from source up to `bufferSize`, dispatches via `callback(item, {signal})`, pushes the wrapped promise into `bufferedPromises`. In `ordered: true` mode it always feeds from `subIterators[0]`; in `ordered: false` it picks the least-targeted iterator via `findLeastTargeted` to prevent starvation — but **only once a sub-iterator actually exists**. With none there is nothing to balance, so the fast-path falls straight through to the main iterator and `findLeastTargeted` is skipped entirely. This is the default-mode hot path; do not regress it.
 
 `nextValue()` is the **consumer**: in a single flat `Promise.race`, races `bufferedPromises[0]` (ordered) or all of `bufferedPromises` (unordered) against a **fresh per-pull park promise**. The park is a `{ resolve }` deferred created each pull, stored in the mutable `currentPark`, and cleared once the race settles. The single construction-time `{ once: true }` listener on `internalAbortController.signal` resolves whatever park is currently waiting. It is deliberately *not* a single long-lived promise: racing the same never-settling promise every pull leaves a `PromiseReaction` on it per item (the nodejs/node#51452 retention pattern). Abort always wins over a buffered value resolving in the same tick — the post-race code re-checks `abortReason` regardless of which entry won the race.
 
-`markAsEnded()` is the **single cleanup path**: sets `isDone`, fires `internalAbortController.abort()`, calls `Promise.allSettled(...iterators.map(it => it.return()))`, clears buffers. Called from `return()`, `throw()`, `Symbol.asyncDispose`, source-exhaustion, and abort delivery. Idempotent via the `isDone` guard.
+`markAsEnded(throwAnyError, value)` is the **single cleanup path**. Cleanup runs at most once (`isDone` guard); the resolved `{ done: true, value }` reflects *this* call's `value` argument so `iterator.return(v)` is spec-correct even after the iterator is already closed. Cleanup itself: fires `internalAbortController.abort()`, calls `Promise.allSettled(...iterators.map(it => it.return()))` (source `.return()` rejections are intentionally swallowed — a broken cleanup must not mask the consumer-facing error), clears buffers, then optionally throws the captured fail-eventually errors. Called from `return()`, `throw()`, `Symbol.asyncDispose`, source-exhaustion, and abort delivery.
+
+`handleAbortIfPending()` and `handleStreamError()` are the two error/abort dispatchers `nextValue` consults. `handleAbortIfPending` returns a `{ kind: 'throw' | 'done' } | undefined` descriptor — non-throwing so the caller can `await markAsEnded()` *before* the throw propagates. `handleStreamError(normalizedErr)` centralises the fail-fast-vs-`capturedErrors.push` decision and is shared by the buffered-promise `{err}` envelope path and the malformed-async-iterable catch (a callback returning `{ [Symbol.asyncIterator]() { throw … } }` is surfaced as a stream error, identical to a callback rejection).
 
 ### Iterator chaining via `currentStep`
 
@@ -59,6 +61,7 @@ The function returns a stateful `AsyncIterableIterator` with these closure varia
 - Aborts cancel **consumption**, not in-flight callback work. Promises cannot be cancelled — the library propagates the signal so user code can voluntarily exit; it does not race-and-discard. The README documents this explicitly.
 - `errors: 'fail-eventually'` (default) keeps the historical "drain then throw" semantics; `'fail-fast'` mirrors `Promise.all`. External abort always wins over queued/captured errors.
 - Existing one-arg callbacks (`async (item) => …`) keep working — JS ignores extra args, so the second-arg widening is non-breaking.
+- `iterator.return(value)` matches `AsyncGenerator.prototype.return` semantics: resolves to `{ done: true, value }`, awaits a thenable `value` so the result never holds a pending promise, and **still runs cleanup** if that await rejects (matching the "as-if a `return value;` was inserted at the suspension point — `finally` blocks run regardless" model). Pinned by `test/return.spec.js` and verified empirically against native `AsyncGenerator` on the current Node.
 
 ## Implementation invariants worth preserving
 
@@ -69,6 +72,8 @@ The function returns a stateful `AsyncIterableIterator` with these closure varia
 ## Style notes
 
 - Helpers and exports use American spelling (`normalizeError`, `lib/misc.js`); local variables follow the helper they wrap (e.g. `normalizedErr`).
+- Two TODO breadcrumbs from earlier development are intentionally gone — the iterator-protocol behaviours they pointed at are implemented and tested. **Don't reintroduce "go read the spec" TODOs in `index.js`**: every reachable behaviour is either covered by a spec file under `test/` or documented in this file. If you find an edge case worth chasing, write the test first.
+- Positional arguments to `markAsEnded(throwAnyError, value)` are non-obvious at call sites — there are only two (`return()` and source-exhaustion via `markAsEnded(true)`), and both currently carry an inline comment explaining the boolean. If you add a third caller, follow the same convention.
 
 ## Test conventions
 
@@ -83,6 +88,8 @@ await flow;
 Inline `for await` blocks **without** the IIFE wrapper will deadlock under fake timers when the source uses real `setTimeout`. Test helpers in `test/utils.js` (`yieldValuesOverTime`, `nestedYieldValuesOverTime`, `promisableTimeout`) are the source of truth — reuse them.
 
 For testing rejections, prefer the `.catch(err => ({ rejectedWith: err }))` envelope pattern (used across `test/abort.spec.js` and `test/errors-fail-fast.spec.js`) over chai-as-promised's `should.be.rejectedWith` when asserting identity-equality on non-Error reasons.
+
+`test/memory.spec.js` is the heap-retention regression guard for the per-pull park invariant. It runs under `--expose-gc` (wired via `.mocharc.json`'s `node-option: ["expose-gc"]`) and self-skips if `globalThis.gc` is unavailable (so `npx mocha test/memory.spec.js` directly still works — it picks up `.mocharc.json`). The other specs are unaffected by the flag.
 
 ## Benchmarks
 
