@@ -408,6 +408,11 @@ export function bufferedAsyncMap (input, callback, options) {
         : [...bufferedPromises, parkPromise]
     );
 
+    // Cleared on the happy path. If the await above threw — which it only can
+    // when a buffered promise's .then wrapper observes a malformed iterator
+    // result — currentPark stays pointing at the (now-orphaned) park; that's
+    // harmless because the next nextValue() call reassigns it and only the
+    // current park is ever resolved by the abort listener.
     currentPark = undefined;
 
     if (raced === ABORT_SENTINEL || abortReason) {
@@ -514,6 +519,9 @@ export function bufferedAsyncMap (input, callback, options) {
         throw err;
       }
 
+      // `false` = don't throw captured fail-eventually errors; return(value)
+      // shouldn't surface earlier callback errors on top of the consumer's
+      // explicit early exit. Second arg is the resolved IteratorResult value.
       return markAsEnded(false, awaited);
     },
     /** @type {NonNullable<AsyncIterableIterator<R>["throw"]>} */
