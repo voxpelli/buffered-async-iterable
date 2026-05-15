@@ -501,7 +501,21 @@ export function bufferedAsyncMap (input, callback, options) {
     // `value` is awaited (matching AsyncGenerator.prototype.return) so a
     // thenable argument never lands in the IteratorResult's value field;
     // cleanup runs once but each call's result reflects its own argument.
-    'return': async (value) => markAsEnded(false, await value),
+    // If the await rejects, cleanup still runs before the rejection
+    // propagates — matching the "as-if a `return value;` was inserted at the
+    // suspension point" model (`finally` blocks run regardless).
+    'return': async (value) => {
+      /** @type {R | undefined} */
+      let awaited;
+      try {
+        awaited = await value;
+      } catch (err) {
+        await markAsEnded();
+        throw err;
+      }
+
+      return markAsEnded(false, awaited);
+    },
     /** @type {NonNullable<AsyncIterableIterator<R>["throw"]>} */
     'throw': async (err) => {
       // Spec-correct as-is: throw(err) rejects once, markAsEnded() closes the

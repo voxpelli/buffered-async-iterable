@@ -108,6 +108,39 @@ describe('bufferedAsyncMap() AsyncInterface return()', () => {
     returnSpy.should.have.been.calledOnce;
   });
 
+  it('should still run cleanup when return(value) receives a rejecting promise', async () => {
+    const source = yieldValuesOverTime(count, (i) => i % 2 === 1 ? 2000 : 100);
+    const sourceIterator = source[Symbol.asyncIterator]();
+    const returnSpy = sinon.spy(sourceIterator, 'return');
+
+    const iterator = bufferedAsyncMap(
+      { [Symbol.asyncIterator]: () => sourceIterator },
+      async (item) => item
+    );
+
+    await iterator.next().should.eventually.deep.equal({ value: 0 });
+
+    const rejection = new Error('rejecting return value');
+    // Pre-attach a no-op catch so node doesn't see an unhandled rejection
+    // before iterator.return() consumes the promise.
+    const rejecting = Promise.reject(rejection);
+    rejecting.catch(() => {});
+
+    const returnResult = iterator.return(rejecting).catch(err => ({ rejectedWith: err }));
+    await clock.runAllAsync();
+    const outcome = await returnResult;
+
+    // The rejection propagates — matching native AsyncGenerator behaviour.
+    outcome.should.deep.equal({ rejectedWith: rejection });
+
+    // ...AND cleanup ran: source.return() was called exactly once, even
+    // though the awaited value rejected before reaching markAsEnded.
+    returnSpy.should.have.been.calledOnce;
+
+    // Subsequent .next() returns done — the iterator is closed.
+    await iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
+  });
+
   it('should be called when a loop breaks', async () => {
     const iterator = bufferedAsyncMap(baseAsyncIterable, async (item) => item, { bufferSize: 3 });
     const returnSpy = sinon.spy(iterator, 'return');
