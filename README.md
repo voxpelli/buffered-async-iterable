@@ -41,23 +41,23 @@ for await (const item of mappedIterator) {
 
 ### Deterministic cleanup with `await using`
 
-The returned iterator implements `Symbol.asyncDispose`, so on runtimes with [explicit resource management](https://github.com/tc39/proposal-explicit-resource-management) (Node 24+, or TypeScript ≥5.2 targeting older runtimes) it can be bound with `await using` — the source's `.return()` is then guaranteed to run when the block exits, no matter whether the loop completed, `break`-ed, or threw:
+The returned iterator implements `Symbol.asyncDispose`, so on runtimes with [explicit resource management](https://github.com/tc39/proposal-explicit-resource-management) (Node 24+, or TypeScript ≥5.2 targeting older runtimes) it can be bound with `await using` — the source's `.return()` is then guaranteed to run when the scope exits, even if the loop is never reached:
 
 ```javascript
 import { bufferedAsyncMap } from 'buffered-async-iterable';
 
-{
-  await using mappedIterator = bufferedAsyncMap(source, async (item) => {
-    return lookup(item);
-  });
+await using mappedIterator = bufferedAsyncMap(source, async (item) => {
+  return lookup(item);
+});
 
-  for await (const item of mappedIterator) {
-    if (shouldStop(item)) break;
-  }
-} // cleanup runs here, regardless of how the block exited
+const config = await loadConfig(); // throws? cleanup still runs
+
+for await (const item of mappedIterator) {
+  process(item, config);
+}
 ```
 
-See [Resource management](#resource-management) for the details.
+A plain `for await … of` already closes the iterator on `break`/`throw` by itself, so `await using` is optional — see [Resource management](#resource-management) for the details.
 
 ### Collecting into an array
 
@@ -216,18 +216,9 @@ External abort always takes precedence over either error mode: if `options.signa
 
 ## Resource management
 
-The returned iterator implements `Symbol.asyncDispose`, so it can be used with [`await using`](https://github.com/tc39/proposal-explicit-resource-management) for deterministic cleanup:
+A plain `for await … of` already closes the iterator (calls its `.return()`, which runs the source's cleanup) when the loop completes, `break`s or throws — no extra syntax needed for the common case.
 
-```javascript
-{
-  await using iterator = bufferedAsyncMap(source, fn);
-  for await (const item of iterator) {
-    if (shouldStop(item)) break;
-  }
-} // source.return() runs here, regardless of how the block exited
-```
-
-Note that a plain `for await … of` already closes the iterator on `break`/`throw` — what `await using` adds is covering the gap where the iterator is created but the loop is never entered (or you hand the iterator around before consuming it):
+The returned iterator additionally implements `Symbol.asyncDispose`, so it can be bound with [`await using`](https://github.com/tc39/proposal-explicit-resource-management). That covers the gap a loop can't: the iterator being created but the loop never entered (or the iterator being handed around before it's consumed):
 
 ```javascript
 await using iterator = bufferedAsyncMap(source, fn);
@@ -239,7 +230,7 @@ for await (const item of iterator) {
 }
 ```
 
-`Symbol.asyncDispose` is equivalent to calling `iterator.return()` for cleanup and is idempotent. The hook itself works on every supported Node version — the native `await using` *syntax* requires Node 24+ (Node 22 only ships the `Symbol.asyncDispose` well-known symbol; use TypeScript ≥5.2 / Babel to transpile the syntax, or call `iterator[Symbol.asyncDispose]()` / `iterator.return()` manually).
+`Symbol.asyncDispose` is equivalent to calling `iterator.return()` for cleanup and is idempotent — the double cleanup from `await using` plus a completed loop is harmless. The native `await using` *syntax* requires Node 24+ (TypeScript ≥5.2 transpiles it for older targets); where it isn't available everything works as it always has.
 
 Both `bufferedAsyncMap` and `mergeIterables` return this same iterator shape.
 
