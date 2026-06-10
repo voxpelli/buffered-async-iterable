@@ -225,7 +225,14 @@ export function bufferedAsyncMap (input, callback, options) {
         }))
         .then(async result => {
           if (!isObject(result)) {
-            throw new TypeError('Expected sub-iterator next() result to be an object');
+            arrayDeleteInPlace(subIterators, currentSubIterator);
+            return {
+              bufferPromise,
+              done: true,
+              fromSubIterator: true,
+              err: new TypeError('Expected sub-iterator next() result to be an object'),
+              value: undefined,
+            };
           }
           if ('err' in result || result.done) {
             arrayDeleteInPlace(subIterators, currentSubIterator);
@@ -250,7 +257,13 @@ export function bufferedAsyncMap (input, callback, options) {
         }))
         .then(async result => {
           if (!isObject(result)) {
-            throw new TypeError('Expected source iterator next() result to be an object');
+            mainReturnedDone = true;
+            return {
+              bufferPromise,
+              done: true,
+              err: new TypeError('Expected source iterator next() result to be an object'),
+              value: undefined,
+            };
           }
           if ('err' in result || result.done) {
             mainReturnedDone = true;

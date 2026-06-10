@@ -714,16 +714,53 @@ describe('bufferedAsyncMap() values', () => {
           throw new Error('Expected a rejection');
         },
         err => {
-          if (err instanceof TypeError) {
-            err.message.should.equal('Expected source iterator next() result to be an object');
-          } else {
-            throw new TypeError('Expected a TypeError');
-          }
+          const captured = err instanceof AggregateError ? err.errors[0] : err;
+          captured.should.be.instanceOf(TypeError);
+          captured.message.should.equal('Expected source iterator next() result to be an object');
         }
       );
 
     await clock.runAllAsync();
     await promisedResult;
+  });
+
+  it('should not emit unhandledRejection when a malformed-result slot is never consumed', async () => {
+    const {
+      asyncIterable,
+      asyncIterator,
+    } = stubAsyncIterator();
+
+    // First .next() resolves a real value; subsequent calls return a
+    // malformed result. We pull the good value and close — the malformed
+    // buffer slots get spliced by markAsEnded without ever being raced.
+    // Pre-fix this surfaced as a process-fatal unhandledRejection.
+    asyncIterator.next.returns('wow');
+    asyncIterator.next.onFirstCall().resolves({ value: 1, done: false });
+
+    /** @type {unknown[]} */
+    const unhandled = [];
+    /**
+     * @param {unknown} reason
+     * @returns {void}
+     */
+    const listener = (reason) => { unhandled.push(reason); };
+    process.on('unhandledRejection', listener);
+
+    try {
+      const flow = (async () => {
+        const iterator = bufferedAsyncMap(asyncIterable, async item => item, { bufferSize: 4 });
+        await iterator.next();
+        await iterator.return();
+      })();
+
+      await clock.runAllAsync();
+      await flow;
+      await clock.runAllAsync();
+    } finally {
+      process.off('unhandledRejection', listener);
+    }
+
+    unhandled.should.be.an('array').with.length(0);
   });
 
   it('should throw TypeError on non-object value from AsyncIterator interface on subIterator', async () => {
@@ -750,11 +787,9 @@ describe('bufferedAsyncMap() values', () => {
           throw new Error('Expected a rejection');
         },
         err => {
-          if (err instanceof TypeError) {
-            err.message.should.equal('Expected sub-iterator next() result to be an object');
-          } else {
-            throw new TypeError('Expected a TypeError');
-          }
+          const captured = err instanceof AggregateError ? err.errors[0] : err;
+          captured.should.be.instanceOf(TypeError);
+          captured.message.should.equal('Expected sub-iterator next() result to be an object');
         }
       );
 
