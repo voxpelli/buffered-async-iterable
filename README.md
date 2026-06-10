@@ -39,6 +39,16 @@ for await (const item of mappedIterator) {
 }
 ```
 
+### Collecting into an array
+
+```javascript
+import { bufferedAsyncMap } from 'buffered-async-iterable';
+
+const results = await Array.fromAsync(bufferedAsyncMap(input, async (item) => {
+  // Apply additional async lookup / processing
+}));
+```
+
 ### Array input
 
 ```javascript
@@ -179,7 +189,7 @@ The returned iterator implements `Symbol.asyncDispose`, so it can be used with [
 
 ### mergeIterables()
 
-Merges all given (async) iterables in parallel, returning the values as they resolve. Thin wrapper over [`bufferedAsyncMap`](#bufferedasyncmap) — see that section for the full semantics of each option.
+Merges all given (async) iterables in parallel, returning the values as they resolve. Thin wrapper over [`bufferedAsyncMap`](#bufferedasyncmap) — see that section for the full semantics of each option. Returns the same iterator shape (including `Symbol.asyncDispose`); input validation is eager (throws at call time, not at first pull).
 
 #### Syntax
 

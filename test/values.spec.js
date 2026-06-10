@@ -1121,6 +1121,19 @@ describe('bufferedAsyncMap() values', () => {
       chai.expect(results[firstReject]?.value).to.equal(sourceError);
     });
 
+    it('exposes Symbol.asyncDispose on the merged iterator', async () => {
+      const iterator = mergeIterables([
+        yieldValuesOverTimeWithPrefix(3, 100, 'a-'),
+      ]);
+
+      chai.expect(typeof iterator[Symbol.asyncDispose]).to.equal('function');
+
+      // Calling dispose runs cleanup once and resolves to undefined.
+      const promised = iterator[Symbol.asyncDispose]();
+      await clock.runAllAsync();
+      chai.expect(await promised).to.equal(undefined);
+    });
+
     it('forwards ordered: true to drain inputs in source order', async () => {
       // Asymmetric timing: the second source is ten times faster than the first.
       // Under the default ordered:false this would interleave (second-* would

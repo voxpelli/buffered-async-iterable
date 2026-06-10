@@ -23,6 +23,8 @@ Engines: Node ≥22.0.0 (the well-known `Symbol.asyncDispose` is required native
 
 The library is one core function (`bufferedAsyncMap`) plus a thin wrapper (`mergeIterables`). Everything lives in `index.js`; `lib/` contains three small helpers worth knowing about.
 
+`mergeIterables` is a direct-return wrapper (not an async generator) — it returns the underlying `bufferedAsyncMap` iterator so consumers get `Symbol.asyncDispose` at runtime (Node 22's native async-generator prototypes don't carry one) and the proper `BufferedAsyncIterableIterator<R>` return type. Construction is eager: input validation throws at call time rather than at first `.next()`.
+
 ### `bufferedAsyncMap(input, callback, options)` — the state machine
 
 The function returns a stateful `AsyncIterableIterator` with these closure variables forming the state machine:

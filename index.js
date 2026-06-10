@@ -16,18 +16,22 @@ async function * yieldIterable (item) {
 }
 
 /**
- * Merge several async (or sync) iterables in parallel. Items are
- * yielded as they become available. Thin wrapper over
- * `bufferedAsyncMap` — see that function for the full semantics of
- * each option.
+ * Merge several async (or sync) iterables in parallel. Items are yielded as
+ * they become available. Returns the underlying `bufferedAsyncMap` iterator
+ * directly so it picks up `Symbol.asyncDispose` (Node 22's native async
+ * generators don't carry one) and the proper return type. Thin wrapper —
+ * see `bufferedAsyncMap` for the full semantics of each option.
+ *
+ * Note: construction is now eager — input validation throws at call time
+ * rather than at first `.next()`.
  *
  * @template T
  * @param {Array<AsyncIterable<T> | Iterable<T> | T[]>} input
  * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined }} [options]
- * @returns {AsyncIterable<T>}
+ * @returns {BufferedAsyncIterableIterator<T>}
  */
-export async function * mergeIterables (input, { bufferSize, cleanupTimeout, errors, ordered, signal } = {}) {
-  yield * bufferedAsyncMap(input, yieldIterable, { bufferSize, cleanupTimeout, errors, ordered, signal });
+export function mergeIterables (input, options) {
+  return bufferedAsyncMap(input, yieldIterable, options);
 }
 
 /**
