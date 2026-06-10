@@ -31,6 +31,23 @@ export async function * mergeIterables (input, { bufferSize, cleanupTimeout, err
 }
 
 /**
+ * Standalone (non-intersected) iterator type. Built deliberately without
+ * `AsyncIterableIterator<R> & ...`: in an intersection the built-in
+ * `any`-typed `next`/`return`/`throw` signatures win overload resolution and
+ * leak `any` through the param types. The shape below is still structurally
+ * assignable to `AsyncIterableIterator<R>` (its method params are `any`).
+ *
+ * @template R
+ * @typedef {{
+ *   next(): Promise<IteratorResult<R, undefined>>,
+ *   return(value?: any): Promise<IteratorReturnResult<any>>,
+ *   throw(err?: any): Promise<IteratorResult<R, undefined>>,
+ *   [Symbol.asyncIterator](): BufferedAsyncIterableIterator<R>,
+ *   [Symbol.asyncDispose](): Promise<void>,
+ * }} BufferedAsyncIterableIterator
+ */
+
+/**
  * Iterates `input` concurrently, applying `callback` to each item with up to
  * `bufferSize` calls in flight. The per-callback `signal` is **always**
  * present (even when no `options.signal` is passed) and aborts on iterator
@@ -43,10 +60,10 @@ export async function * mergeIterables (input, { bufferSize, cleanupTimeout, err
  * @param {AsyncIterable<T> | Iterable<T> | T[]} input
  * @param {(item: T, opts: { signal: AbortSignal }) => (Promise<R>|AsyncIterable<R>)} callback
  * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined }} [options]
- * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]>, [Symbol.asyncDispose]: () => Promise<void> }}
+ * @returns {BufferedAsyncIterableIterator<R>}
  */
 export function bufferedAsyncMap (input, callback, options) {
-  /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { bufferPromise: BufferPromise, fromSubIterator?: boolean, isSubIterator?: boolean, err?: unknown }>} BufferPromise */
+  /** @typedef {Promise<IteratorResult<R | AsyncIterable<R>, undefined> & { bufferPromise: BufferPromise, fromSubIterator?: boolean, isSubIterator?: boolean, err?: unknown }>} BufferPromise */
   const {
     bufferSize = 6,
     cleanupTimeout,
@@ -55,9 +72,9 @@ export function bufferedAsyncMap (input, callback, options) {
     signal: externalSignal,
   } = options || {};
 
-  /** @type {AsyncIterable<T>} */
+  /** @type {AsyncIterable<T, void, void>} */
   const asyncIterable = (isIterable(input) || Array.isArray(input))
-    ? makeIterableAsync(input)
+    ? makeIterableAsync(/** @type {Iterable<T> | T[]} */ (input))
     : input;
 
   if (!input) throw new TypeError('Expected input to be provided');
@@ -70,10 +87,10 @@ export function bufferedAsyncMap (input, callback, options) {
   if (externalSignal !== undefined && !(externalSignal instanceof AbortSignal)) throw new TypeError('Expected signal to be an AbortSignal');
   if (errorsMode !== 'fail-eventually' && errorsMode !== 'fail-fast') throw new TypeError("Expected errors to be 'fail-eventually' or 'fail-fast'");
 
-  /** @type {AsyncIterator<T, unknown>} */
+  /** @type {AsyncIterator<T, void, void>} */
   const asyncIterator = asyncIterable[Symbol.asyncIterator]();
 
-  /** @type {AsyncIterator<R, unknown>[]} */
+  /** @type {AsyncIterator<R, void, void>[]} */
   const subIterators = [];
 
   /** @type {BufferPromise[]} */
@@ -106,18 +123,23 @@ export function bufferedAsyncMap (input, callback, options) {
   let abortReason;
 
   if (externalSignal) {
-    if (externalSignal.aborted) {
-      abortReason = { reason: externalSignal.reason, delivered: false };
-      internalAbortController.abort(externalSignal.reason);
+    // AbortSignal.reason is typed `any` in the DOM lib; widen it to `unknown`
+    // locally so callers don't inherit the `any` (and so type-coverage stays
+    // honest — a JSDoc cast on each property read doesn't move the needle).
+    /** @type {Omit<AbortSignal, 'reason'> & { reason: unknown }} */
+    const safeSignal = externalSignal;
+    if (safeSignal.aborted) {
+      abortReason = { reason: safeSignal.reason, delivered: false };
+      internalAbortController.abort(safeSignal.reason);
     } else {
-      externalSignal.addEventListener('abort', () => {
+      safeSignal.addEventListener('abort', () => {
         // If the iterator already closed via return()/throw()/dispose, abort is too late: no-op.
         if (isDone) return;
         if (!abortReason) {
-          abortReason = { reason: externalSignal.reason, delivered: false };
+          abortReason = { reason: safeSignal.reason, delivered: false };
         }
         if (!internalAbortController.signal.aborted) {
-          internalAbortController.abort(externalSignal.reason);
+          internalAbortController.abort(safeSignal.reason);
         }
       }, { once: true });
     }
@@ -160,10 +182,9 @@ export function bufferedAsyncMap (input, callback, options) {
    * has already closed).
    *
    * @param {boolean} [throwAnyError]
-   * @param {R} [value]
-   * @returns {Promise<IteratorResult<R>>}
+   * @returns {Promise<IteratorReturnResult<undefined>>}
    */
-  const markAsEnded = async (throwAnyError, value) => {
+  const markAsEnded = async (throwAnyError) => {
     if (!isDone) {
       isDone = true;
 
@@ -206,7 +227,7 @@ export function bufferedAsyncMap (input, callback, options) {
       }
     }
 
-    return { done: true, value };
+    return { done: true, value: undefined };
   };
 
   // Producer: pulls from source up to bufferSize, dispatches via callback,
@@ -219,7 +240,7 @@ export function bufferedAsyncMap (input, callback, options) {
   const fillQueue = () => {
     if (capturedErrors.length > 0 || isDone || abortReason) return;
 
-    /** @type {AsyncIterator<R, unknown>|undefined} */
+    /** @type {AsyncIterator<R, void, void>|undefined} */
     let currentSubIterator;
 
     if (ordered || subIterators.length === 0) {
@@ -237,7 +258,7 @@ export function bufferedAsyncMap (input, callback, options) {
     /** @type {BufferPromise} */
     const bufferPromise = currentSubIterator
       ? Promise.resolve(currentSubIterator.next())
-        .catch(err => ({
+        .catch((/** @type {unknown} */ err) => ({
           err: normalizeError(err, 'Unknown subiterator error'),
         }))
         .then(async result => {
@@ -256,20 +277,35 @@ export function bufferedAsyncMap (input, callback, options) {
           }
 
           /** @type {Awaited<BufferPromise>} */
-          const promiseValue = {
-            bufferPromise,
-            fromSubIterator: true,
-            ...(
-              'err' in result
-                ? { done: true, value: undefined, ...result }
-                : result
-            ),
-          };
+          let promiseValue;
+          if ('err' in result) {
+            promiseValue = {
+              bufferPromise,
+              fromSubIterator: true,
+              done: true,
+              value: undefined,
+              err: result.err,
+            };
+          } else if (result.done) {
+            promiseValue = {
+              bufferPromise,
+              fromSubIterator: true,
+              done: true,
+              value: undefined,
+            };
+          } else {
+            promiseValue = {
+              bufferPromise,
+              fromSubIterator: true,
+              done: false,
+              value: result.value,
+            };
+          }
 
           return promiseValue;
         })
       : Promise.resolve(asyncIterator.next())
-        .catch(err => ({
+        .catch((/** @type {unknown} */ err) => ({
           err: normalizeError(err, 'Unknown iterator error'),
         }))
         .then(async result => {
@@ -282,15 +318,21 @@ export function bufferedAsyncMap (input, callback, options) {
               value: undefined,
             };
           }
-          if ('err' in result || result.done) {
+          if ('err' in result) {
             mainReturnedDone = true;
             return {
               bufferPromise,
-              ...(
-                'err' in result
-                  ? { done: true, value: undefined, ...result }
-                  : result
-              ),
+              done: true,
+              value: undefined,
+              err: result.err,
+            };
+          }
+          if (result.done) {
+            mainReturnedDone = true;
+            return {
+              bufferPromise,
+              done: true,
+              value: undefined,
             };
           }
 
@@ -490,11 +532,11 @@ export function bufferedAsyncMap (input, callback, options) {
 
       return drainOrContinue();
     } else if (isSubIterator && isAsyncIterable(value)) {
-      /** @type {AsyncIterator<R>} */
+      /** @type {AsyncIterator<R, void, void>} */
       let subIterator;
 
       try {
-        subIterator = value[Symbol.asyncIterator]();
+        subIterator = /** @type {AsyncIterable<R, void, void>} */ (value)[Symbol.asyncIterator]();
       } catch (subIterableErr) {
         // The callback returned a malformed async iterable — the
         // Symbol.asyncIterator property exists but invoking it threw.
@@ -517,7 +559,7 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {Promise<IteratorResult<R>>} */
   let currentStep;
 
-  /** @type {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]>, [Symbol.asyncDispose]: () => Promise<void> }} */
+  /** @type {BufferedAsyncIterableIterator<R>} */
   const resultAsyncIterableIterator = {
     async next () {
       // Chain via then(nextValue, nextValue) so a rejection on one .next() does
@@ -551,10 +593,12 @@ export function bufferedAsyncMap (input, callback, options) {
 
       // `false` = don't throw captured fail-eventually errors; return(value)
       // shouldn't surface earlier callback errors on top of the consumer's
-      // explicit early exit. Second arg is the resolved IteratorResult value.
-      return markAsEnded(false, awaited);
+      // explicit early exit. The resolved value is threaded back here so the
+      // IteratorResult mirrors *this* call's argument even after the iterator
+      // has already closed.
+      await markAsEnded(false);
+      return { done: true, value: awaited };
     },
-    /** @type {NonNullable<AsyncIterableIterator<R>["throw"]>} */
     'throw': async (err) => {
       // Spec-correct as-is: throw(err) rejects once, markAsEnded() closes the
       // iterator, and subsequent .next() returns { done: true } — no need to

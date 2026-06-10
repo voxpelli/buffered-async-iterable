@@ -15,7 +15,8 @@
   "author": "Pelle Wessman <pelle@kodfabrik.se> (http://kodfabrik.se/)",
   "license": "MIT",
   "engines": {
-    "node": "^22.16.0 || >=24.0.0"
+    "node": "^22.16.0 || >=24.0.0",
+    "typescript": ">=5.9"
   },
   "type": "module",
   "sideEffects": false,
@@ -44,7 +45,7 @@
     "check:knip": "knip",
     "check:lint": "eslint --report-unused-disable-directives .",
     "check:tsc": "tsc",
-    "check:type-coverage": "type-coverage --detail --strict --at-least 94 --ignore-files 'test/*.spec.js' --ignore-files 'benchmark/**/*.js'",
+    "check:type-coverage": "type-coverage --detail --strict --at-least 99 --ignore-files 'test/*.spec.js' --ignore-files 'benchmark/**/*.js'",
     "clean": "run-p clean:*",
     "clean:declarations": "rm -rf $(find . -maxdepth 2 -type f -name '*.d.ts*')",
     "prepare": "husky",
