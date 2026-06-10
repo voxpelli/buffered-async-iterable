@@ -37,6 +37,29 @@ describe('bufferedAsyncMap() basic', () => {
     }, TypeError, 'Expected callback to be a function');
   });
 
+  it('should throw when provided cleanupTimeout is not a positive finite number', () => {
+    const asyncIterable = (async function * () {})();
+    const invalid = [
+      true,
+      0,
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      'fast',
+    ];
+
+    for (const cleanupTimeout of invalid) {
+      should.Throw(() => {
+        bufferedAsyncMap(
+          asyncIterable,
+          async () => {},
+          // @ts-ignore
+          { cleanupTimeout }
+        );
+      }, TypeError, 'Expected cleanupTimeout to be a positive finite number of milliseconds', `cleanupTimeout=${String(cleanupTimeout)} should be rejected`);
+    }
+  });
+
   it('should throw when provided bufferSize is not a positive integer', () => {
     const asyncIterable = (async function * () {})();
     const invalid = [

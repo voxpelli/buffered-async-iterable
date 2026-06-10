@@ -23,11 +23,11 @@ async function * yieldIterable (item) {
  *
  * @template T
  * @param {Array<AsyncIterable<T> | Iterable<T> | T[]>} input
- * @param {{ bufferSize?: number|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined }} [options]
+ * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined }} [options]
  * @returns {AsyncIterable<T>}
  */
-export async function * mergeIterables (input, { bufferSize, errors, ordered, signal } = {}) {
-  yield * bufferedAsyncMap(input, yieldIterable, { bufferSize, errors, ordered, signal });
+export async function * mergeIterables (input, { bufferSize, cleanupTimeout, errors, ordered, signal } = {}) {
+  yield * bufferedAsyncMap(input, yieldIterable, { bufferSize, cleanupTimeout, errors, ordered, signal });
 }
 
 /**
@@ -42,13 +42,14 @@ export async function * mergeIterables (input, { bufferSize, errors, ordered, si
  * @template R
  * @param {AsyncIterable<T> | Iterable<T> | T[]} input
  * @param {(item: T, opts: { signal: AbortSignal }) => (Promise<R>|AsyncIterable<R>)} callback
- * @param {{ bufferSize?: number|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined }} [options]
+ * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined }} [options]
  * @returns {AsyncIterableIterator<R> & { return: NonNullable<AsyncIterableIterator<R>["return"]>, throw: NonNullable<AsyncIterableIterator<R>["throw"]>, [Symbol.asyncDispose]: () => Promise<void> }}
  */
 export function bufferedAsyncMap (input, callback, options) {
   /** @typedef {Promise<IteratorResult<R|AsyncIterable<R>> & { bufferPromise: BufferPromise, fromSubIterator?: boolean, isSubIterator?: boolean, err?: unknown }>} BufferPromise */
   const {
     bufferSize = 6,
+    cleanupTimeout,
     errors: errorsMode = 'fail-eventually',
     ordered = false,
     signal: externalSignal,
@@ -63,6 +64,9 @@ export function bufferedAsyncMap (input, callback, options) {
   if (!isAsyncIterable(asyncIterable)) throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
   if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');
   if (!Number.isInteger(bufferSize) || bufferSize < 1) throw new TypeError('Expected bufferSize to be a positive integer');
+  if (cleanupTimeout !== undefined && (typeof cleanupTimeout !== 'number' || !Number.isFinite(cleanupTimeout) || cleanupTimeout <= 0)) {
+    throw new TypeError('Expected cleanupTimeout to be a positive finite number of milliseconds');
+  }
   if (externalSignal !== undefined && !(externalSignal instanceof AbortSignal)) throw new TypeError('Expected signal to be an AbortSignal');
   if (errorsMode !== 'fail-eventually' && errorsMode !== 'fail-fast') throw new TypeError("Expected errors to be 'fail-eventually' or 'fail-fast'");
 
@@ -170,17 +174,27 @@ export function bufferedAsyncMap (input, callback, options) {
       // Source .return() rejections are intentionally swallowed: allSettled
       // keeps cleanup going even if one source's return() rejects, so a broken
       // cleanup can't mask the consumer-facing error or leave buffers uncleared.
-      await Promise.allSettled(
+      // Wrap as async so a sync-throwing .return getter or body becomes a
+      // promise rejection that allSettled can swallow.
+      const cleanup = Promise.allSettled(
         [
           // Ensure the main iterators are completed
           ...(mainReturnedDone ? [] : [asyncIterator]),
           ...subIterators,
         ]
-          // Wrap as async so a sync-throwing .return getter or body becomes a
-          // promise rejection that allSettled can swallow — same intent as
-          // above, broader coverage.
           .map(async item => item.return && item.return())
       );
+
+      // If the caller opted into a cleanup deadline, race it. A source stuck
+      // in a hung await would otherwise queue .return() behind the hung
+      // .next() and never settle — hanging the consumer-facing close /
+      // abort forever.
+      await (cleanupTimeout === undefined
+        ? cleanup
+        : Promise.race([
+          cleanup,
+          new Promise(resolve => { setTimeout(resolve, cleanupTimeout); }),
+        ]));
 
       bufferedPromises.splice(0);
       subIterators.splice(0);

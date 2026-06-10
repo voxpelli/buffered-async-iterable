@@ -26,6 +26,22 @@ async function * slowSource (delayBeforeFirstYield) {
   yield 2;
 }
 
+/**
+ * Async generator whose `finally` block hangs forever — its `.return()`
+ * runs through the `finally` and never settles, modelling a source stuck
+ * in slow teardown.
+ *
+ * @returns {AsyncGenerator<number>}
+ */
+async function * wedgedSource () {
+  try {
+    yield 1;
+    yield 2;
+  } finally {
+    await new Promise(() => {}); // hung forever
+  }
+}
+
 chai.use(chaiAsPromised);
 chai.use(sinonChai);
 const should = chai.should();
@@ -367,5 +383,56 @@ describe('bufferedAsyncMap() options.signal', () => {
     const after = iterator.next();
     await clock.runAllAsync();
     await after.should.eventually.deep.equal({ done: true, value: undefined });
+  });
+
+  // --- cleanupTimeout ---
+
+  it('cleanupTimeout caps the wait for a wedged source.return()', async () => {
+    const ac = new AbortController();
+    const reason = new Error('abort');
+    const iterator = bufferedAsyncMap(
+      wedgedSource(),
+      async (item) => item,
+      { signal: ac.signal, bufferSize: 1, cleanupTimeout: 50 }
+    );
+
+    const first = iterator.next();
+    await clock.runAllAsync();
+    await first;
+
+    ac.abort(reason);
+
+    const next = iterator.next().catch(err => ({ rejectedWith: err }));
+    // Advance past the cleanupTimeout — without it the parked .next() would
+    // hang on markAsEnded forever.
+    await clock.tickAsync(60);
+    chai.expect(await next).to.deep.equal({ rejectedWith: reason });
+  });
+
+  it('default (no cleanupTimeout) still waits forever for a wedged source', async () => {
+    // Sanity check that the unbounded default behaviour is preserved when
+    // the option is left undefined.
+    const ac = new AbortController();
+    const iterator = bufferedAsyncMap(
+      wedgedSource(),
+      async (item) => item,
+      { signal: ac.signal, bufferSize: 1 }
+    );
+
+    const first = iterator.next();
+    await clock.runAllAsync();
+    await first;
+
+    ac.abort(new Error('abort'));
+
+    // Race the next() against a finite tick. Without the option, the
+    // parked next() never settles because markAsEnded awaits the wedged
+    // source.return().
+    let settled = false;
+    const next = iterator.next().finally(() => { settled = true; });
+    next.catch(() => {}); // attach a no-op handler — we never await it
+    await clock.tickAsync(10_000);
+
+    settled.should.equal(false);
   });
 });

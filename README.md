@@ -77,7 +77,7 @@ Iterates and applies the `callback` to up to `bufferSize` items from `input` yie
 
 #### Syntax
 
-`bufferedAsyncMap(input, callback[, { bufferSize=6, ordered=false, signal, errors='fail-eventually' }]) => AsyncIterableIterator`
+`bufferedAsyncMap(input, callback[, { bufferSize=6, cleanupTimeout, ordered=false, signal, errors='fail-eventually' }]) => AsyncIterableIterator`
 
 #### Arguments
 
@@ -87,6 +87,7 @@ Iterates and applies the `callback` to up to `bufferSize` items from `input` yie
 #### Options
 
 * `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultaneous items processed at once in the buffer.
+* `cleanupTimeout` – _optional_ – a number of milliseconds to wait for the source iterator's `.return()` before giving up. Defaults to no timeout (await forever) — match `AsyncGenerator`. Useful when the source might hang and you don't want abort/return/dispose to wait for it. See [Cancellation](#cancellation).
 * `ordered` – _optional_ – defaults to `false`, when `true` the result will be returned in order instead of unordered.
 * `signal` – _optional_ – an `AbortSignal`. When aborted, iteration stops pulling from the source, the next pending or freshly-called `iterator.next()` rejects with `signal.reason` exactly once, and all subsequent calls return `{ done: true, value: undefined }`. See [Cancellation](#cancellation).
 * `errors` – _optional_ – defaults to `'fail-eventually'`. Controls how errors from the callback or the source surface to the consumer. See [Errors](#errors).
@@ -126,6 +127,15 @@ bufferedAsyncMap(source, async (item, { signal }) => {
 The per-callback `signal` is always present (even when no `options.signal` is passed) and aborts on iterator close (return / throw / dispose / source-exhaustion-with-cleanup), so callbacks can fast-path on shutdown. Callbacks observe `signal.aborted === true` within one microtask of iterator close — they continue running (Promises are not cancellable) until they reach the next `await` of something signal-aware (`fetch`, `undici`, etc.) or until they voluntarily exit via a check on `signal.aborted`.
 
 If `options.signal` is already aborted at construction time, the source is never read and the first `iterator.next()` rejects with `signal.reason`. External abort always wins over queued errors.
+
+If the source might hang inside `.return()` (for example a native async generator whose `finally` block awaits an unsettled promise), set `cleanupTimeout` to put an upper bound on how long the consumer-facing `iterator.next()` rejection waits for the source to finish closing. The pending source promises are abandoned (not cancellable) but the consumer unblocks:
+
+```javascript
+for await (const item of bufferedAsyncMap(maybeWedgedSource, fn, {
+  signal: ac.signal,
+  cleanupTimeout: 1_000,
+})) { /* … */ }
+```
 
 ## Errors
 
@@ -173,7 +183,7 @@ Merges all given (async) iterables in parallel, returning the values as they res
 
 #### Syntax
 
-`mergeIterables(input[, { bufferSize=6, ordered=false, signal, errors='fail-eventually' }]) => AsyncIterableIterator`
+`mergeIterables(input[, { bufferSize=6, cleanupTimeout, ordered=false, signal, errors='fail-eventually' }]) => AsyncIterableIterator`
 
 #### Arguments
 
@@ -182,6 +192,7 @@ Merges all given (async) iterables in parallel, returning the values as they res
 #### Options
 
 * `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultaneous items processed at once in the buffer.
+* `cleanupTimeout` – _optional_ – a millisecond cap on how long abort/return waits for source `.return()` to settle. See [Cancellation](#cancellation).
 * `ordered` – _optional_ – defaults to `false`. When `false` (the default), values are interleaved as they resolve; when `true`, the merge preserves the input array order (drains the first iterable before pulling from the second, etc.).
 * `signal` – _optional_ – an `AbortSignal`. Aborts the merge. See [Cancellation](#cancellation).
 * `errors` – _optional_ – defaults to `'fail-eventually'`. See [Errors](#errors).
