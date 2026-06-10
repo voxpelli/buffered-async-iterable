@@ -2,10 +2,10 @@
   "name": "buffered-async-iterable",
   "version": "1.0.1",
   "description": "Creates a prefetched async iterable",
-  "homepage": "http://github.com/voxpelli/buffered-async-iterable",
+  "homepage": "https://github.com/voxpelli/buffered-async-iterable",
   "repository": {
     "type": "git",
-    "url": "git://github.com/voxpelli/buffered-async-iterable.git"
+    "url": "git+https://github.com/voxpelli/buffered-async-iterable.git"
   },
   "keywords": [
     "async",
@@ -18,12 +18,16 @@
     "node": ">=22.0.0"
   },
   "type": "module",
-  "exports": "./index.js",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
   "types": "index.d.ts",
   "files": [
     "lib/**/*.js",
-    "lib/**/*.d.ts",
-    "lib/**/*.d.ts.map",
     "index.js",
     "index.d.ts",
     "index.d.ts.map"
@@ -31,6 +35,7 @@
   "scripts": {
     "bench": "node --expose-gc --allow-natives-syntax benchmark/index.js",
     "bench:json": "node --expose-gc --allow-natives-syntax benchmark/index.js --json",
+    "bench:smoke": "node --check benchmark/index.js && node --check benchmark/throughput.js && node --check benchmark/abort.js && node --check benchmark/nested.js && node --check benchmark/fixtures.js",
     "build": "run-s build:*",
     "build:0": "run-s clean",
     "build:1-declaration": "tsc -p declaration.tsconfig.json",

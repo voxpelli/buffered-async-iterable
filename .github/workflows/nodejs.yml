@@ -18,3 +18,16 @@ jobs:
     uses: voxpelli/ghatemplates/.github/workflows/test.yml@main
     with:
       node-versions: '22,24'
+
+  bench-smoke:
+    name: Benchmark smoke (node --check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Pure syntax check — the bench dir isn't covered by mocha/tsc-strict,
+      # so this guards against the bench files rotting silently when mitata's
+      # API changes or someone touches benchmark/* without running it.
+      - run: npm run bench:smoke
