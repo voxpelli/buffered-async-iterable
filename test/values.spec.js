@@ -688,6 +688,9 @@ describe('bufferedAsyncMap() values', () => {
 
     outcome.rejectedWith.should.be.an.instanceOf(Error);
     outcome.rejectedWith.message.should.equal('Unknown callback error');
+    // The original non-Error value is preserved on .cause so callers can
+    // recover the evidence (a bare 'Unknown' message is useless in a log).
+    outcome.rejectedWith.cause.should.equal('a plain string rejection');
   });
 
   it('should throw TypeError on non-object value from AsyncIterator interface', async () => {
