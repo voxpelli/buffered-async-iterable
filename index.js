@@ -62,7 +62,7 @@ export function bufferedAsyncMap (input, callback, options) {
   if (!input) throw new TypeError('Expected input to be provided');
   if (!isAsyncIterable(asyncIterable)) throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
   if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');
-  if (typeof bufferSize !== 'number') throw new TypeError('Expected bufferSize to be a number');
+  if (!Number.isInteger(bufferSize) || bufferSize < 1) throw new TypeError('Expected bufferSize to be a positive integer');
   if (externalSignal !== undefined && !(externalSignal instanceof AbortSignal)) throw new TypeError('Expected signal to be an AbortSignal');
   if (errorsMode !== 'fail-eventually' && errorsMode !== 'fail-fast') throw new TypeError("Expected errors to be 'fail-eventually' or 'fail-fast'");
 

@@ -37,16 +37,27 @@ describe('bufferedAsyncMap() basic', () => {
     }, TypeError, 'Expected callback to be a function');
   });
 
-  it('should throw when provided size is not a number', () => {
-    should.Throw(() => {
-      const asyncIterable = (async function * () {})();
-      bufferedAsyncMap(
-        asyncIterable,
-        async () => {},
-        // @ts-ignore
-        { bufferSize: true }
-      );
-    }, TypeError, 'Expected bufferSize to be a number');
+  it('should throw when provided bufferSize is not a positive integer', () => {
+    const asyncIterable = (async function * () {})();
+    const invalid = [
+      true,
+      0,
+      -1,
+      Number.NaN,
+      0.5,
+      Number.POSITIVE_INFINITY,
+    ];
+
+    for (const bufferSize of invalid) {
+      should.Throw(() => {
+        bufferedAsyncMap(
+          asyncIterable,
+          async () => {},
+          // @ts-ignore
+          { bufferSize }
+        );
+      }, TypeError, 'Expected bufferSize to be a positive integer', `bufferSize=${String(bufferSize)} should be rejected`);
+    }
   });
 
   it('should return an AsyncIterable when provided with required arguments', () => {
