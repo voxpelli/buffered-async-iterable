@@ -9,7 +9,7 @@
 
 Buffered parallel processing of async iterables / generators.
 
-**Requirements**: Node.js ≥22.0.0 (native `Symbol.asyncDispose` is required).
+**Requirements**: Node.js `^22.16.0 || >=24.0.0` (native `Symbol.asyncDispose` is required). For TypeScript consumers: TypeScript ≥5.9.
 
 [![npm version](https://img.shields.io/npm/v/buffered-async-iterable.svg?style=flat)](https://www.npmjs.com/package/buffered-async-iterable)
 [![npm downloads](https://img.shields.io/npm/dm/buffered-async-iterable.svg?style=flat)](https://www.npmjs.com/package/buffered-async-iterable)
@@ -38,6 +38,26 @@ for await (const item of mappedIterator) {
   // Consume the buffered async iterable
 }
 ```
+
+### Deterministic cleanup with `await using`
+
+The returned iterator implements `Symbol.asyncDispose`, so on runtimes with [explicit resource management](https://github.com/tc39/proposal-explicit-resource-management) (Node 24+, or TypeScript ≥5.2 targeting older runtimes) it can be bound with `await using` — the source's `.return()` is then guaranteed to run when the block exits, no matter whether the loop completed, `break`-ed, or threw:
+
+```javascript
+import { bufferedAsyncMap } from 'buffered-async-iterable';
+
+{
+  await using mappedIterator = bufferedAsyncMap(source, async (item) => {
+    return lookup(item);
+  });
+
+  for await (const item of mappedIterator) {
+    if (shouldStop(item)) break;
+  }
+} // cleanup runs here, regardless of how the block exited
+```
+
+See [Resource management](#resource-management) for the details.
 
 ### Collecting into an array
 
@@ -87,7 +107,9 @@ Iterates and applies the `callback` to up to `bufferSize` items from `input` yie
 
 #### Syntax
 
-`bufferedAsyncMap(input, callback[, { bufferSize=6, cleanupTimeout, ordered=false, signal, errors='fail-eventually' }]) => AsyncIterableIterator`
+`bufferedAsyncMap(input, callback[, { bufferSize=6, cleanupTimeout, ordered=false, signal, errors='fail-eventually' }]) => BufferedAsyncIterableIterator`
+
+The returned `BufferedAsyncIterableIterator` type (exported in the type declarations) is an `AsyncIterableIterator` that additionally guarantees `return()`, `throw()` and `[Symbol.asyncDispose]()` to be present.
 
 #### Arguments
 
@@ -103,6 +125,26 @@ Iterates and applies the `callback` to up to `bufferSize` items from `input` yie
 * `errors` – _optional_ – defaults to `'fail-eventually'`. Controls how errors from the callback or the source surface to the consumer. See [Errors](#errors).
 
 The returned iterator also implements `Symbol.asyncDispose`, so it can be used with `await using` for deterministic cleanup. See [Resource management](#resource-management).
+
+### mergeIterables()
+
+Merges all given (async) iterables in parallel, returning the values as they resolve. Thin wrapper over [`bufferedAsyncMap`](#bufferedasyncmap) — see that section for the full semantics of each option. Returns the same iterator shape (including `Symbol.asyncDispose`); input validation is eager (throws at call time, not at first pull).
+
+#### Syntax
+
+`mergeIterables(input[, { bufferSize=6, cleanupTimeout, ordered=false, signal, errors='fail-eventually' }]) => BufferedAsyncIterableIterator`
+
+#### Arguments
+
+* `input` – an array of async iterables, ordinary iterables and/or arrays
+
+#### Options
+
+* `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultaneous items processed at once in the buffer.
+* `cleanupTimeout` – _optional_ – a millisecond cap on how long abort/return waits for source `.return()` to settle. See [Cancellation](#cancellation).
+* `ordered` – _optional_ – defaults to `false`. When `false` (the default), values are interleaved as they resolve; when `true`, the merge preserves the input array order (drains the first iterable before pulling from the second, etc.).
+* `signal` – _optional_ – an `AbortSignal`. Aborts the merge. See [Cancellation](#cancellation).
+* `errors` – _optional_ – defaults to `'fail-eventually'`. See [Errors](#errors).
 
 ## Cancellation
 
@@ -185,27 +227,21 @@ The returned iterator implements `Symbol.asyncDispose`, so it can be used with [
 } // source.return() runs here, regardless of how the block exited
 ```
 
-`Symbol.asyncDispose` is equivalent to calling `iterator.return()` for cleanup and is idempotent. Native `await using` requires Node 22+ (or a transpiler).
+Note that a plain `for await … of` already closes the iterator on `break`/`throw` — what `await using` adds is covering the gap where the iterator is created but the loop is never entered (or you hand the iterator around before consuming it):
 
-### mergeIterables()
+```javascript
+await using iterator = bufferedAsyncMap(source, fn);
 
-Merges all given (async) iterables in parallel, returning the values as they resolve. Thin wrapper over [`bufferedAsyncMap`](#bufferedasyncmap) — see that section for the full semantics of each option. Returns the same iterator shape (including `Symbol.asyncDispose`); input validation is eager (throws at call time, not at first pull).
+const config = await loadConfig(); // throws? cleanup still runs
 
-#### Syntax
+for await (const item of iterator) {
+  process(item, config);
+}
+```
 
-`mergeIterables(input[, { bufferSize=6, cleanupTimeout, ordered=false, signal, errors='fail-eventually' }]) => AsyncIterableIterator`
+`Symbol.asyncDispose` is equivalent to calling `iterator.return()` for cleanup and is idempotent. The hook itself works on every supported Node version — the native `await using` *syntax* requires Node 24+ (Node 22 only ships the `Symbol.asyncDispose` well-known symbol; use TypeScript ≥5.2 / Babel to transpile the syntax, or call `iterator[Symbol.asyncDispose]()` / `iterator.return()` manually).
 
-#### Arguments
-
-* `input` – an array of async iterables, ordinary iterables and/or arrays
-
-#### Options
-
-* `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultaneous items processed at once in the buffer.
-* `cleanupTimeout` – _optional_ – a millisecond cap on how long abort/return waits for source `.return()` to settle. See [Cancellation](#cancellation).
-* `ordered` – _optional_ – defaults to `false`. When `false` (the default), values are interleaved as they resolve; when `true`, the merge preserves the input array order (drains the first iterable before pulling from the second, etc.).
-* `signal` – _optional_ – an `AbortSignal`. Aborts the merge. See [Cancellation](#cancellation).
-* `errors` – _optional_ – defaults to `'fail-eventually'`. See [Errors](#errors).
+Both `bufferedAsyncMap` and `mergeIterables` return this same iterator shape.
 
 ## Performance
 
