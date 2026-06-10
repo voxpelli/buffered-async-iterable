@@ -176,7 +176,10 @@ export function bufferedAsyncMap (input, callback, options) {
           ...(mainReturnedDone ? [] : [asyncIterator]),
           ...subIterators,
         ]
-          .map(item => item.return && item.return())
+          // Wrap as async so a sync-throwing .return getter or body becomes a
+          // promise rejection that allSettled can swallow — same intent as
+          // above, broader coverage.
+          .map(async item => item.return && item.return())
       );
 
       bufferedPromises.splice(0);

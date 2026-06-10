@@ -141,6 +141,37 @@ describe('bufferedAsyncMap() AsyncInterface return()', () => {
     await iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
   });
 
+  it('should tolerate a sync-throwing source .return() during cleanup', async () => {
+    const cleanupError = new Error('explode during return');
+    const healthyReturn = sinon.stub().resolves({ done: true, value: undefined });
+
+    // Two main-iter values; .return() on this source throws synchronously
+    // (mimics e.g. a release() that ran some sync teardown before returning
+    // a promise — or a buggy getter).
+    /** @type {AsyncIterator<number>} */
+    const explodingSource = {
+      next: sinon.stub().resolves({ value: 1, done: false }),
+      'return': sinon.stub().throws(cleanupError),
+    };
+    /** @type {AsyncIterable<number>} */
+    const explodingIterable = { [Symbol.asyncIterator]: () => explodingSource };
+
+    // The callback returns a healthy sub-iterator, so markAsEnded calls
+    // .return() on both the main (throwing) and a sub-iterator (healthy).
+    const iterator = bufferedAsyncMap(explodingIterable, () => ({
+      [Symbol.asyncIterator]: () => ({
+        next: sinon.stub().resolves({ value: 'a', done: false }),
+        'return': healthyReturn,
+      }),
+    }));
+
+    await iterator.next().should.eventually.deep.equal({ value: 'a' });
+    // The consumer-facing return() must resolve cleanly even though one
+    // source's .return() threw synchronously.
+    await iterator.return().should.eventually.deep.equal({ done: true, value: undefined });
+    healthyReturn.should.have.been.called;
+  });
+
   it('should be called when a loop breaks', async () => {
     const iterator = bufferedAsyncMap(baseAsyncIterable, async (item) => item, { bufferSize: 3 });
     const returnSpy = sinon.spy(iterator, 'return');
