@@ -143,7 +143,7 @@ There are two error modes:
 
 ### `'fail-eventually'` (default)
 
-Iteration continues after errors. Captured errors are thrown when the iterator drains:
+After the first error from the callback or the source, no further items are pulled from the source. Items already in flight when the error was captured continue to drain — their successful values still surface to the consumer, and any further errors among them are also captured. When the buffer empties, the captured errors are thrown:
 
 * If exactly one error was captured, it is thrown directly (identity preserved).
 * If two or more errors were captured, they are wrapped in an [`AggregateError`](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) (in capture order).
