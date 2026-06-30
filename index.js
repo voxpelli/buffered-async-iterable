@@ -213,13 +213,22 @@ export function bufferedAsyncMap (input, callback, options) {
       // If the caller opted into a cleanup deadline, race it. A source stuck
       // in a hung await would otherwise queue .return() behind the hung
       // .next() and never settle — hanging the consumer-facing close /
-      // abort forever.
-      await (cleanupTimeout === undefined
-        ? cleanup
-        : Promise.race([
-          cleanup,
-          new Promise(resolve => { setTimeout(resolve, cleanupTimeout); }),
-        ]));
+      // abort forever. The timer is cleared once the race settles so a prompt
+      // cleanup doesn't leave a pending setTimeout keeping the event loop
+      // alive for the rest of the (possibly long) cleanupTimeout window.
+      if (cleanupTimeout === undefined) {
+        await cleanup;
+      } else {
+        /** @type {(value: void) => void} */
+        let fireTimeout;
+        const timeout = new Promise(resolve => { fireTimeout = resolve; });
+        const timer = setTimeout(() => fireTimeout(), cleanupTimeout);
+        try {
+          await Promise.race([cleanup, timeout]);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
 
       bufferedPromises.splice(0);
       subIterators.splice(0);

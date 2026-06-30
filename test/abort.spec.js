@@ -409,6 +409,30 @@ describe('bufferedAsyncMap() options.signal', () => {
     chai.expect(await next).to.deep.equal({ rejectedWith: reason });
   });
 
+  it('cleanupTimeout clears its timer when cleanup wins the race', async () => {
+    // A well-behaved source whose .return() settles promptly: cleanup wins the
+    // race well before cleanupTimeout. The timer must be cleared, not left
+    // pending — otherwise it keeps the event loop alive for the full window
+    // after the iterator has already closed.
+    const iterator = bufferedAsyncMap(
+      ['a', 'b', 'c'],
+      async (item) => item,
+      { bufferSize: 1, cleanupTimeout: 100_000 }
+    );
+
+    const first = iterator.next();
+    await clock.runAllAsync();
+    await first;
+
+    // Close the iterator. The source's .return() resolves via microtasks, so
+    // the race settles without the clock ever reaching cleanupTimeout.
+    await iterator.return();
+
+    // No leftover timer: the 100s cleanupTimeout was cleared in markAsEnded's
+    // finally. Before the fix this would be 1 (a dangling setTimeout).
+    clock.countTimers().should.equal(0);
+  });
+
   it('default (no cleanupTimeout) still waits forever for a wedged source', async () => {
     // Sanity check that the unbounded default behaviour is preserved when
     // the option is left undefined.
