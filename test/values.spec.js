@@ -693,6 +693,50 @@ describe('bufferedAsyncMap() values', () => {
     outcome.rejectedWith.cause.should.equal('a plain string rejection');
   });
 
+  it('should not attach a `cause` for a nullish rejection from the callback', async () => {
+    baseAsyncIterable = yieldValuesOverTime(count, (i) => i % 2 === 1 ? 2000 : 100);
+
+    let callCount = 0;
+    /**
+     * @param {number} item
+     * @returns {Promise<number>}
+     */
+    const callback = async (item) => {
+      callCount += 1;
+      if (callCount === 2) {
+        // Reject with undefined (e.g. a bare `Promise.reject()` / `throw undefined`):
+        // there's no evidence worth preserving, so `cause` should be left unset
+        // rather than attached as `cause: undefined` (which logs as noise).
+        // eslint-disable-next-line no-throw-literal
+        throw undefined;
+      }
+      return item;
+    };
+
+    /** @type {number[]} */
+    const drained = [];
+
+    const promisedResult = (async () => {
+      for await (const value of bufferedAsyncMap(baseAsyncIterable, callback)) {
+        drained.push(value);
+      }
+    })()
+      .then(
+        () => {
+          throw new Error('Expected a rejection');
+        },
+        err => ({ rejectedWith: err })
+      );
+
+    await clock.runAllAsync();
+    const outcome = await promisedResult;
+
+    outcome.rejectedWith.should.be.an.instanceOf(Error);
+    outcome.rejectedWith.message.should.equal('Unknown callback error');
+    // No `cause` own property at all — not `cause: undefined`.
+    Object.prototype.hasOwnProperty.call(outcome.rejectedWith, 'cause').should.equal(false);
+  });
+
   it('should throw TypeError on non-object value from AsyncIterator interface', async () => {
     const {
       asyncIterable,
