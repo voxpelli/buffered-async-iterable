@@ -277,12 +277,14 @@ export function bufferedAsyncMap (input, callback, options) {
         .then(async result => {
           if (!isObject(result)) {
             arrayDeleteInPlace(subIterators, currentSubIterator);
+            // Keep the field order identical to the `'err' in result` arm below
+            // so V8 sees one hidden class for the done+err envelope shape.
             return {
               bufferPromise,
-              done: true,
               fromSubIterator: true,
-              err: new TypeError('Expected sub-iterator next() result to be an object'),
+              done: true,
               value: undefined,
+              err: new TypeError('Expected sub-iterator next() result to be an object'),
             };
           }
           if ('err' in result || result.done) {
@@ -324,11 +326,13 @@ export function bufferedAsyncMap (input, callback, options) {
         .then(async result => {
           if (!isObject(result)) {
             mainReturnedDone = true;
+            // Same field order as the `'err' in result` / callback-catch arms
+            // so the done+err envelope shares one hidden class.
             return {
               bufferPromise,
               done: true,
-              err: new TypeError('Expected source iterator next() result to be an object'),
               value: undefined,
+              err: new TypeError('Expected source iterator next() result to be an object'),
             };
           }
           if ('err' in result) {
@@ -368,8 +372,8 @@ export function bufferedAsyncMap (input, callback, options) {
             promiseValue = {
               bufferPromise,
               done: true,
-              err: normalizeError(err, 'Unknown callback error'),
               value: undefined,
+              err: normalizeError(err, 'Unknown callback error'),
             };
           }
 
