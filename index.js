@@ -575,13 +575,21 @@ export function bufferedAsyncMap (input, callback, options) {
     // Refill if a sub-iterator is in play, then either close on drain or
     // recurse for the next value. Shared by the error and the
     // malformed-sub-iterable paths.
+    //
+    // The abortReason check matters on the drain branch: an external abort
+    // can land in the microtask window of the `await handleStreamError(...)`
+    // preceding this call, after the top-of-nextValue abort check already
+    // ran. markAsEnded(true) would then throw the captured errors AND leave
+    // the abort undelivered — two consecutive rejections, breaking both
+    // "external abort wins over queued errors" and "reject exactly once".
+    // Re-entering nextValue routes delivery through its top block instead.
     /** @returns {Promise<IteratorResult<R>>} */
     const drainOrContinue = () => {
       if (fromSubIterator || subIterators.length > 0) {
         fillQueue();
       }
 
-      return bufferedPromises.length === 0
+      return (bufferedPromises.length === 0 && !abortReason)
         ? markAsEnded(true)
         : nextValue();
     };

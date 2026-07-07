@@ -387,6 +387,54 @@ describe('bufferedAsyncMap() options.signal', () => {
     await after.should.eventually.deep.equal({ done: true, value: undefined });
   });
 
+  it('delivers exactly one rejection when an abort races the drain-throw', async () => {
+    // The window: fail-eventually captured an error and the buffer drained;
+    // an external abort landing in the await-gap between error capture and
+    // the drain-throw must not produce a second rejection (pre-fix: the
+    // captured error was thrown AND the following next() rejected with the
+    // abort reason). Sweep the abort across microtask offsets so the spec
+    // pins the invariant at every interleaving, not one brittle hop count.
+    for (let hops = 0; hops <= 10; hops++) {
+      const ac = new AbortController();
+      const reason = new Error(`abort-at-${hops}`);
+      const cbError = new Error(`cb-${hops}`);
+
+      const iterator = bufferedAsyncMap(['only'], async () => { throw cbError; }, {
+        bufferSize: 1,
+        signal: ac.signal,
+      });
+
+      // Land the abort behind `hops` microtask boundaries — varying points
+      // inside nextValue's internal await chain.
+      const abortTask = (async () => {
+        for (let i = 0; i < hops; i++) {
+          await Promise.resolve();
+        }
+        ac.abort(reason);
+      })();
+
+      /** @type {Array<{ rejected: boolean, value?: unknown }>} */
+      const outcomes = [];
+      for (let i = 0; i < 3; i++) {
+        try {
+          const r = await iterator.next();
+          outcomes.push({ rejected: false, value: r });
+        } catch (err) {
+          outcomes.push({ rejected: true, value: err });
+        }
+      }
+      await abortTask;
+
+      const rejections = outcomes.filter(o => o.rejected);
+      rejections.should.have.length(1, `offset ${hops} saw ${rejections.length} rejections`);
+
+      const firstReject = outcomes.findIndex(o => o.rejected);
+      for (const o of outcomes.slice(firstReject + 1)) {
+        o.should.deep.equal({ rejected: false, value: { done: true, value: undefined } });
+      }
+    }
+  });
+
   // --- external-signal listener lifecycle ---
 
   it('detaches its external-signal abort listener when the iterator closes', async () => {
