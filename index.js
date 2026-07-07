@@ -198,14 +198,14 @@ export function bufferedAsyncMap (input, callback, options) {
   // accidental strings likely.
   const asyncMethod = /** @type {{ [Symbol.asyncIterator]?: unknown }} */ (input)[Symbol.asyncIterator];
   // eslint-disable-next-line unicorn/no-null -- `!= null` is the nullish guard (GetMethod: null and undefined mean absent)
-  if (asyncMethod != null && typeof asyncMethod !== 'function') throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
+  if (asyncMethod != null && typeof asyncMethod !== 'function') throw new TypeError('Expected the Symbol.asyncIterator member to be a function');
 
   /** @type {unknown} */
   let syncMethod;
   if (typeof asyncMethod !== 'function') {
-    if (typeof input === 'string') throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
+    if (typeof input === 'string') throw new TypeError('Expected asyncIterable to not be a string — spread it first if iterating characters is intended');
     syncMethod = /** @type {{ [Symbol.iterator]?: unknown }} */ (input)[Symbol.iterator];
-    if (typeof syncMethod !== 'function') throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
+    if (typeof syncMethod !== 'function') throw new TypeError('Expected asyncIterable to have a callable Symbol.asyncIterator or Symbol.iterator');
   }
 
   if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');

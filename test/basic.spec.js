@@ -23,7 +23,15 @@ describe('bufferedAsyncMap() basic', () => {
     should.Throw(() => {
       // @ts-ignore
       bufferedAsyncMap(true);
-    }, TypeError, 'Expected asyncIterable to have a Symbol.asyncIterator function');
+    }, TypeError, 'Expected asyncIterable to have a callable Symbol.asyncIterator or Symbol.iterator');
+
+    // The deliberate string-primitive divergence from for-await gets its
+    // own message — a string HAS a callable Symbol.iterator, so the
+    // protocol-naming message would be false for it.
+    should.Throw(() => {
+      // @ts-ignore
+      bufferedAsyncMap('abc');
+    }, TypeError, 'Expected asyncIterable to not be a string — spread it first if iterating characters is intended');
   });
 
   it('should throw when provided callback is not a function', () => {
@@ -171,7 +179,7 @@ describe('bufferedAsyncMap() basic', () => {
         { [Symbol.asyncIterator]: 42, * [Symbol.iterator] () { yield 'never'; } },
         async () => {}
       );
-    }, TypeError, 'Expected asyncIterable to have a Symbol.asyncIterator function');
+    }, TypeError, 'Expected the Symbol.asyncIterator member to be a function');
   });
 
   it('should read the Symbol.asyncIterator member exactly once (stateful getter cannot desync validation from use)', async () => {
@@ -198,6 +206,9 @@ describe('bufferedAsyncMap() basic', () => {
   });
 
   it('should throw the descriptive TypeError for a non-callable Symbol.asyncIterator member', () => {
+    // A NULLISH member is GetMethod-absent: the sync fallback runs and the
+    // rejection names the protocols; a non-nullish non-callable member is
+    // rejected as such, with no fallback (matching for-await).
     should.Throw(() => {
       bufferedAsyncMap(
         // @ts-ignore
@@ -205,7 +216,7 @@ describe('bufferedAsyncMap() basic', () => {
         { [Symbol.asyncIterator]: null },
         async () => {}
       );
-    }, TypeError, 'Expected asyncIterable to have a Symbol.asyncIterator function');
+    }, TypeError, 'Expected asyncIterable to have a callable Symbol.asyncIterator or Symbol.iterator');
 
     should.Throw(() => {
       bufferedAsyncMap(
@@ -213,7 +224,7 @@ describe('bufferedAsyncMap() basic', () => {
         { [Symbol.asyncIterator]: 42 },
         async () => {}
       );
-    }, TypeError, 'Expected asyncIterable to have a Symbol.asyncIterator function');
+    }, TypeError, 'Expected the Symbol.asyncIterator member to be a function');
   });
 
   it('should support very large bufferSize values', async () => {
