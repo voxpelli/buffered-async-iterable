@@ -44,11 +44,42 @@ closes *synchronously* when `return()` is called — a concurrent `next()`
 resolves `{ done: true }` and the source is not pulled during the await
 window.
 
-**Same-realm instances are assumed.** `options.signal` must be an
-`AbortSignal` from the current realm (`instanceof` check), and error identity
-(fail-fast, single-error fail-eventually) assumes errors are same-realm
-`Error` instances — cross-realm errors (`node:vm`, some worker setups) get
-wrapped in a fresh `Error` with the original on `.cause`.
+**Concurrent `next()` calls are queued.** Overlapping `next()` calls are
+chained — native AsyncGenerator's request-queue behaviour — so each call
+resolves a distinct result in pull order, which is what makes the iterator
+safe to share between concurrent consumers. A rejected pull does not poison
+later calls: the next call observes the post-rejection state (usually
+`{ done: true }`).
+
+**Same-realm instances are assumed, and non-`Error` throws are normalized.**
+`options.signal` must be an `AbortSignal` from the current realm
+(`instanceof` check), and error identity (fail-fast, single-error
+fail-eventually) assumes errors are same-realm `Error` instances. Anything
+else — a cross-realm error (`node:vm`, some worker setups), `throw 'oops'`,
+`throw 42`, a bare `Promise.reject()` — is normalized into a fresh `Error`
+with a context-specific message (`Unknown callback error`,
+`Unknown iterator error`, …) and the original value preserved on `.cause`
+(omitted when the thrown value was nullish, which carries no information).
+A consumer matching on a non-`Error` sentinel should check `.cause`.
+
+## Ordered mode
+
+`ordered: true` changes *delivery* order, not *dispatch*: callbacks still run
+concurrently up to `bufferSize`, and each result is delivered once every
+earlier item's result has been delivered. A slow first item therefore
+head-of-line blocks the *results*, not the *work* — the timing spec in
+`test/values.spec.js` pins that a full ordered run completes in roughly the
+longest item's time plus the tail, not the serial sum.
+
+Values from an async-generator callback are delivered contiguously and in
+source order: everything item N's generator yields comes before anything from
+item N+1 (pinned by the nested-ordered spec in `test/values.spec.js`; in
+ordered mode the buffer always feeds from the current sub-iterator rather
+than load-balancing).
+
+Abort delivery and both error modes behave identically in ordered and
+unordered mode (pinned by `test/abort.spec.js` and
+`test/errors-fail-fast.spec.js`).
 
 ## Cancellation in depth
 

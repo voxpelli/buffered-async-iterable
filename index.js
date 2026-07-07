@@ -101,9 +101,9 @@ async function * yieldIterable (item) {
  * main input, whose member is captured on a single read and invoked.
  *
  * @template T
- * @param {Array<AsyncIterable<T> | (Iterable<T> & object) | T[]>} input
- * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined }} [options]
- * @returns {BufferedAsyncIterableIterator<T>}
+ * @param {Array<AsyncIterable<T> | (Iterable<T> & object) | T[]>} input array of (async) iterables to merge — validated eagerly, string elements rejected
+ * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined }} [options] same options as `bufferedAsyncMap`; `ordered: true` drains the inputs in array order
+ * @returns {BufferedAsyncIterableIterator<T>} async iterator with guaranteed `return()`, `throw()` and `[Symbol.asyncDispose]()`
  */
 export function mergeIterables (input, options) {
   if (!Array.isArray(input)) throw new TypeError('Expected input to be an array of iterables');
@@ -166,10 +166,10 @@ export function mergeIterables (input, options) {
  *
  * @template T
  * @template R
- * @param {AsyncIterable<T> | (Iterable<T> & object) | T[]} input
- * @param {(item: T, opts: { signal: AbortSignal }) => (Promise<R>|AsyncIterable<R>)} callback
- * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined }} [options]
- * @returns {BufferedAsyncIterableIterator<R>}
+ * @param {AsyncIterable<T> | (Iterable<T> & object) | T[]} input async iterable, sync iterable or array (strings rejected — spread first if chars are intended)
+ * @param {(item: T, opts: { signal: AbortSignal }) => (Promise<R>|AsyncIterable<R>)} callback async function, or async generator whose values merge into the stream; `signal` is always present
+ * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined }} [options] `bufferSize` (concurrency, default 6), `cleanupTimeout` (ms cap on close-time source cleanup, default unbounded), `ordered` (source-order delivery, default false), `signal` (external abort), `errors` (default 'fail-eventually')
+ * @returns {BufferedAsyncIterableIterator<R>} async iterator with guaranteed `return()`, `throw()` and `[Symbol.asyncDispose]()`
  */
 export function bufferedAsyncMap (input, callback, options) {
   /** @typedef {Promise<{ bufferPromise: BufferPromise, isSubIterator: boolean, value: R | AsyncIterable<R> | undefined, fromSubIterator?: boolean, done?: boolean, err?: Error | undefined }>} BufferPromise */

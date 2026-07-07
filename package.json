@@ -1,7 +1,7 @@
 {
   "name": "buffered-async-iterable",
   "version": "1.0.1",
-  "description": "Creates a prefetched async iterable",
+  "description": "Buffered parallel processing of async iterables / generators",
   "homepage": "https://github.com/voxpelli/buffered-async-iterable",
   "repository": {
     "type": "git",
@@ -10,7 +10,15 @@
   "keywords": [
     "async",
     "iterator",
-    "highwatermark"
+    "highwatermark",
+    "async-iterable",
+    "async-generator",
+    "concurrency",
+    "parallel",
+    "map",
+    "merge",
+    "buffer",
+    "backpressure"
   ],
   "author": "Pelle Wessman <pelle@kodfabrik.se> (http://kodfabrik.se/)",
   "license": "MIT",

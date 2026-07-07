@@ -43,6 +43,10 @@ Reach for something else when:
 
 ## Usage
 
+```sh
+npm install buffered-async-iterable
+```
+
 ### Simple
 
 ```javascript
@@ -140,7 +144,7 @@ for await (const line of merged) {
 
 ### bufferedAsyncMap()
 
-Iterates and applies the `callback` to up to `bufferSize` items from `input` yielding values as they resolve.
+Applies `callback` to every item of `input`, keeping up to `bufferSize` calls in flight at once — `bufferSize` is the concurrency limit — and yielding values as they resolve.
 
 #### Syntax
 
@@ -155,14 +159,14 @@ Two things worth knowing up front (the full contract lives in [Advanced semantic
 
 #### Arguments
 
-* `input` – either an async iterable, an ordinary iterable or an array
-* `callback(item, { signal })` – an async function or an async generator. Values from async-generator callbacks are merged into the main stream (the buffer is refilled from whichever iterator — the input included — has the fewest items in flight). The second argument's `signal` aborts on cancellation — see [Cancellation](#cancellation).
+* `input` – either an async iterable, an ordinary iterable or an array (strings — although iterable — are rejected eagerly; spread first if iterating characters is intended)
+* `callback(item, { signal })` – an async function or an async generator. Values from async-generator callbacks are merged into the main stream (in the default unordered mode the buffer is refilled from whichever iterator — the input included — has the fewest items in flight; with `ordered: true` the current sub-iterator is drained first). The second argument's `signal` aborts on cancellation — see [Cancellation](#cancellation).
 
 #### Options
 
 * `bufferSize` – _optional_ – defaults to `6`, the max number of items processed simultaneously. Prefetching is speculative — up to `bufferSize` concurrent `next()` calls can be in flight before one resolves `done` (after which the source is never pulled again); async-generator sources serialize those natively, but a hand-rolled iterator that throws on concurrent pulls should use `bufferSize: 1`. Very large buffers pay an O(bufferSize) cost per unordered pull. Details in [Advanced semantics](ADVANCED.md#construction-and-the-prefetch-model).
 * `cleanupTimeout` – _optional_ – a millisecond cap on how long close/abort waits for the source's `.return()` to settle. Defaults to no timeout (await forever), matching `AsyncGenerator`. See [Cancellation](#cancellation).
-* `ordered` – _optional_ – defaults to `false`, when `true` the result will be returned in order instead of unordered.
+* `ordered` – _optional_ – defaults to `false`. When `true`, results are delivered in source order — concurrency is unchanged, only the yield order. See [Ordered mode](ADVANCED.md#ordered-mode).
 * `signal` – _optional_ – an `AbortSignal`. When aborted, the next `iterator.next()` rejects with `signal.reason` exactly once and all later calls resolve `{ done: true, value: undefined }`. See [Cancellation](#cancellation).
 * `errors` – _optional_ – defaults to `'fail-eventually'`. Controls how errors from the callback or the source surface to the consumer. See [Errors](#errors).
 
@@ -170,7 +174,7 @@ The returned iterator also implements `Symbol.asyncDispose`, so it can be used w
 
 ### mergeIterables()
 
-Merges all given (async) iterables in parallel, returning the values as they resolve. Thin wrapper over [`bufferedAsyncMap`](#bufferedasyncmap) — see that section for the full semantics of each option. Returns the same iterator shape (including `Symbol.asyncDispose`); validation is eager and covers the elements: a non-iterable element throws at call time with its index (`Expected input[1] to have a callable Symbol.asyncIterator or Symbol.iterator`), and string elements are rejected outright — merging `'abc'` as the characters `'a'`, `'b'`, `'c'` is almost always a mistake; spread the string first if that is genuinely intended.
+Merges all given (async) iterables in parallel, returning the values as they resolve. Thin wrapper over [`bufferedAsyncMap`](#bufferedasyncmap) — `mergeIterables(list)` is equivalent to `bufferedAsyncMap(list, async function * (x) { yield * x })` plus eager per-element validation; see that section for the full semantics of each option. Returns the same iterator shape (including `Symbol.asyncDispose`); validation is eager and covers the elements: a non-iterable element throws at call time with its index (`Expected input[1] to have a callable Symbol.asyncIterator or Symbol.iterator`), and string elements are rejected outright — merging `'abc'` as the characters `'a'`, `'b'`, `'c'` is almost always a mistake; spread the string first if that is genuinely intended.
 
 #### Syntax
 
@@ -182,11 +186,8 @@ Merges all given (async) iterables in parallel, returning the values as they res
 
 #### Options
 
-* `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultaneous items processed at once in the buffer.
-* `cleanupTimeout` – _optional_ – a millisecond cap on how long abort/return waits for source `.return()` to settle. See [Cancellation](#cancellation).
 * `ordered` – _optional_ – defaults to `false`. When `false` (the default), values are interleaved as they resolve; when `true`, the merge preserves the input array order (drains the first iterable before pulling from the second, etc.).
-* `signal` – _optional_ – an `AbortSignal`. Aborts the merge. See [Cancellation](#cancellation).
-* `errors` – _optional_ – defaults to `'fail-eventually'`. See [Errors](#errors).
+* The remaining options (`bufferSize`, `cleanupTimeout`, `signal`, `errors`) behave exactly as documented under [`bufferedAsyncMap`](#bufferedasyncmap).
 
 ## Cancellation
 
@@ -290,7 +291,7 @@ suite.
 ## Similar modules
 
 * [`hwp`](https://github.com/mcollina/hwp) – iterates over an async iterable with concurrency, like this module; no nested-generator fan-out, merge helper or buffer load-balancing
-* [`p-map`](https://github.com/sindresorhus/p-map) – concurrent async mapping over *arrays/fixed collections* rather than streams
+* [`p-map`](https://github.com/sindresorhus/p-map) – concurrent async mapping; its `pMapIterable` accepts async-iterable input with `concurrency` + `backpressure` options, but delivers strictly in order (no yield-as-they-resolve) and has no generator fan-out, merge helper, `Symbol.asyncDispose` or abort-delivery contract
 * Node's [`ReadableStream.prototype.pipeThrough`](https://nodejs.org/api/webstreams.html) / [`stream.pipeline`](https://nodejs.org/api/stream.html) – heavier-weight streaming with transforms, when you're already in stream land
 
 <!-- ## See also
