@@ -12,10 +12,13 @@ import {
 
 // 1. The always-on abort wiring. internalAbortController is minted on every
 //    call, the per-callback `{ signal }` object is allocated per dispatch, and
-//    nextValue races a shared abortPromise. These three benches must stay
-//    within noise of each other — that proves passing `options.signal` /
-//    `errors: 'fail-fast'` does not add a hot-path cost over the no-options
-//    case, and that the shared abortPromise did not regress per-pull overhead.
+//    nextValue races a fresh per-pull park promise (NOT a shared long-lived
+//    abort promise — that design was removed for the nodejs/node#51452
+//    retention it caused; see CLAUDE.md's invariants). These three benches
+//    must stay within noise of each other — that proves passing
+//    `options.signal` / `errors: 'fail-fast'` does not add a hot-path cost
+//    over the no-options case, and that the per-pull park does not regress
+//    per-pull overhead.
 group('abort wiring: always-on cost', () => {
   const count = 5000;
 

@@ -111,6 +111,12 @@ Iterates and applies the `callback` to up to `bufferSize` items from `input` yie
 
 The returned `BufferedAsyncIterableIterator` type (exported in the type declarations) is an `AsyncIterableIterator` that additionally guarantees `return()`, `throw()` and `[Symbol.asyncDispose]()` to be present.
 
+Semantics worth knowing:
+
+* **Construction starts work immediately.** Up to `bufferSize` items are pulled and their callbacks dispatched before the first `.next()` — that is the prefetching the library exists for. Construct close to consumption, and pair early construction with `await using` (or an explicit `return()`) so an error before the loop doesn't strand in-flight work.
+* **No two-way communication.** Values passed to `next(v)` are ignored (buffering decouples consumer pulls from source pulls), and `throw(err)` always terminates the iterator — it is never forwarded to the source, so a source generator cannot `try/catch` around its `yield` and recover.
+* **Same-realm instances.** `options.signal` must be an `AbortSignal` from the current realm (`instanceof` check), and error identity (fail-fast, single-error fail-eventually) assumes errors are same-realm `Error` instances — cross-realm errors (`node:vm`, some worker setups) get wrapped with the original on `.cause`.
+
 #### Arguments
 
 * `input` – either an async iterable, an ordinary iterable or an array
@@ -128,7 +134,7 @@ The returned iterator also implements `Symbol.asyncDispose`, so it can be used w
 
 ### mergeIterables()
 
-Merges all given (async) iterables in parallel, returning the values as they resolve. Thin wrapper over [`bufferedAsyncMap`](#bufferedasyncmap) — see that section for the full semantics of each option. Returns the same iterator shape (including `Symbol.asyncDispose`); input validation is eager (throws at call time, not at first pull).
+Merges all given (async) iterables in parallel, returning the values as they resolve. Thin wrapper over [`bufferedAsyncMap`](#bufferedasyncmap) — see that section for the full semantics of each option. Returns the same iterator shape (including `Symbol.asyncDispose`); validation is eager and covers the elements: a non-iterable element throws at call time with its index (`Expected input[1] to be …`), and string elements are rejected outright — merging `'abc'` as the characters `'a'`, `'b'`, `'c'` is almost always a mistake; spread the string first if that is genuinely intended.
 
 #### Syntax
 
@@ -180,7 +186,7 @@ The per-callback `signal` is always present (even when no `options.signal` is pa
 
 If `options.signal` is already aborted at construction time, the source is never read and the first `iterator.next()` rejects with `signal.reason`. External abort always wins over queued errors.
 
-If the source might hang inside `.return()` (for example a native async generator whose `finally` block awaits an unsettled promise), set `cleanupTimeout` to put an upper bound on how long the consumer-facing `iterator.next()` rejection waits for the source to finish closing. The pending source promises are abandoned (not cancellable) but the consumer unblocks:
+Abort delivery waits for the source to finish closing: the rejecting `iterator.next()` only settles after the source's `.return()` (its `finally` blocks) has run — the same guarantee `for await`/`await using` give you on normal completion. If the source might hang inside `.return()` (for example a native async generator whose `finally` block awaits an unsettled promise), set `cleanupTimeout` to put an upper bound on how long that wait can take. The pending source promises are abandoned (not cancellable) but the consumer unblocks:
 
 ```javascript
 for await (const item of bufferedAsyncMap(maybeWedgedSource, fn, {
@@ -212,7 +218,7 @@ for await (const item of bufferedAsyncMap(source, fn, { errors: 'fail-fast' })) 
 }
 ```
 
-External abort always takes precedence over either error mode: if `options.signal` aborts while errors are queued, the consumer sees `signal.reason`, not the captured errors.
+External abort takes precedence over **queued / not-yet-captured** errors: if `options.signal` aborts while fail-eventually errors sit captured, the consumer sees `signal.reason`, not the captured errors. The one exception is a fail-fast error already committed as the shutdown reason — once fail-fast has begun closing the iterator, its error wins (first event wins) and an abort landing mid-cleanup is a no-op.
 
 ## Resource management
 
