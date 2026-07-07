@@ -83,13 +83,18 @@ export function bufferedAsyncMap (input, callback, options) {
     signal: externalSignal,
   } = options || {};
 
+  // Async iteration is preferred when the input implements both protocols —
+  // matching for-await's GetIterator(async) order; the sync-iterable wrap is
+  // only for inputs with no async protocol at all.
   /** @type {AsyncIterable<T, void, void>} */
-  const asyncIterable = (isIterable(input) || Array.isArray(input))
+  const asyncIterable = (!isAsyncIterable(input) && (isIterable(input) || Array.isArray(input)))
     ? makeIterableAsync(/** @type {Iterable<T> | T[]} */ (input))
-    : input;
+    : /** @type {AsyncIterable<T, void, void>} */ (input);
 
   if (!input) throw new TypeError('Expected input to be provided');
-  if (!isAsyncIterable(asyncIterable)) throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
+  // `in`-presence alone isn't enough — a non-callable Symbol.asyncIterator
+  // member would otherwise escape with an unbranded TypeError at invocation.
+  if (!isAsyncIterable(asyncIterable) || typeof asyncIterable[Symbol.asyncIterator] !== 'function') throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
   if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');
   if (!Number.isInteger(bufferSize) || bufferSize < 1) throw new TypeError('Expected bufferSize to be a positive integer');
   // 2147483647 = Node's TIMEOUT_MAX (2^31-1): setTimeout silently clamps

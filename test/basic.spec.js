@@ -48,7 +48,7 @@ describe('bufferedAsyncMap() basic', () => {
       'fast',
       // Above Node's TIMEOUT_MAX, setTimeout silently clamps to 1ms —
       // turning a ~25-day grace period into abandon-after-1ms.
-      2 ** 31,
+      2147483648,
       Number.MAX_SAFE_INTEGER,
     ];
 
@@ -96,6 +96,49 @@ describe('bufferedAsyncMap() basic', () => {
     }
   });
 
+  it('should prefer async iteration when the input implements both protocols', async () => {
+    // for-await's GetIterator(async) prefers Symbol.asyncIterator; the
+    // library must consume the same sequence — pre-fix the sync-iterable
+    // wrap won and the sync sequence was processed instead.
+    const hybrid = {
+      * [Symbol.iterator] () {
+        yield 'sync-a';
+        yield 'sync-b';
+      },
+      async * [Symbol.asyncIterator] () {
+        yield 'async-a';
+        yield 'async-b';
+      },
+    };
+
+    /** @type {string[]} */
+    const collected = [];
+    for await (const value of bufferedAsyncMap(hybrid, async (item) => item)) {
+      collected.push(value);
+    }
+
+    collected.toSorted().should.deep.equal(['async-a', 'async-b']);
+  });
+
+  it('should throw the descriptive TypeError for a non-callable Symbol.asyncIterator member', () => {
+    should.Throw(() => {
+      bufferedAsyncMap(
+        // @ts-ignore
+        // eslint-disable-next-line unicorn/no-null -- a null member is exactly the malformed input under test
+        { [Symbol.asyncIterator]: null },
+        async () => {}
+      );
+    }, TypeError, 'Expected asyncIterable to have a Symbol.asyncIterator function');
+
+    should.Throw(() => {
+      bufferedAsyncMap(
+        // @ts-ignore
+        { [Symbol.asyncIterator]: 42 },
+        async () => {}
+      );
+    }, TypeError, 'Expected asyncIterable to have a Symbol.asyncIterator function');
+  });
+
   it('should support very large bufferSize values', async () => {
     // The refill loop is iterative; the previous tail self-recursion put
     // O(bufferSize) frames on the stack during the construction-time fill
@@ -127,7 +170,7 @@ describe('bufferedAsyncMap() basic', () => {
     }
     await iterator.return();
 
-    collected.sort().should.deep.equal(['a', 'b', 'c']);
+    collected.toSorted().should.deep.equal(['a', 'b', 'c']);
   });
 
   it('should return an AsyncIterable when provided with required arguments', () => {
