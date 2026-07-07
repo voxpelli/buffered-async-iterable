@@ -366,19 +366,33 @@ describe('bufferedAsyncMap() options.signal', () => {
     await after.should.eventually.deep.equal({ done: true, value: undefined });
   });
 
-  it('delivers exactly one rejection when an abort races the drain-throw', async () => {
+  it('delivers exactly one rejection when an abort races the drain-throw, with the winner owning the identity', async () => {
     // The window: fail-eventually captured an error and the buffer drained;
     // an external abort landing in the await-gap between error capture and
-    // the drain-throw must not produce a second rejection (pre-fix: the
-    // captured error was thrown AND the following next() rejected with the
-    // abort reason). Sweep the abort across microtask offsets so the spec
-    // pins the invariant at every interleaving, not one brittle hop count.
+    // the drain-throw commits a shutdown race. The guard's observable
+    // defect when reverted is rejection IDENTITY, not count (the
+    // closed-iterator suppression keeps the total at one either way): the
+    // abort reason would lose to the captured callback error despite
+    // winning the commit race.
+    //
+    // The commit-point oracle is the per-callback signal's reason:
+    // requestConsumerAbort writes the external reason; a plain close aborts
+    // the internal controller bare (default AbortError); whichever aborts
+    // first wins, and the reason is immutable afterwards. Observed
+    // abort-vs-rejection ORDER is NOT a valid oracle — the rejection
+    // settles many microtasks after the commit, so an abort can fire first
+    // and still correctly lose.
     for (let hops = 0; hops <= 10; hops++) {
       const ac = new AbortController();
       const reason = new Error(`abort-at-${hops}`);
       const cbError = new Error(`cb-${hops}`);
 
-      const iterator = bufferedAsyncMap(['only'], async () => { throw cbError; }, {
+      /** @type {AbortSignal | undefined} */
+      let capturedSignal;
+      const iterator = bufferedAsyncMap(['only'], async (_item, { signal }) => {
+        capturedSignal = signal;
+        throw cbError;
+      }, {
         bufferSize: 1,
         signal: ac.signal,
       });
@@ -406,6 +420,15 @@ describe('bufferedAsyncMap() options.signal', () => {
 
       const rejections = outcomes.filter(o => o.rejected);
       rejections.should.have.length(1, `offset ${hops} saw ${rejections.length} rejections`);
+
+      // Sampled after settlement: the signal's reason is the immutable
+      // record of which side committed the shutdown first.
+      const abortWon = capturedSignal?.aborted === true && capturedSignal.reason === reason;
+      const expected = abortWon ? reason : cbError;
+      chai.expect(rejections[0]?.value).to.equal(
+        expected,
+        `offset ${hops}: abortWon=${abortWon}, expected ${/** @type {Error} */ (expected).message}`
+      );
 
       const firstReject = outcomes.findIndex(o => o.rejected);
       for (const o of outcomes.slice(firstReject + 1)) {
