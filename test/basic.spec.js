@@ -120,6 +120,69 @@ describe('bufferedAsyncMap() basic', () => {
     collected.toSorted().should.deep.equal(['async-a', 'async-b']);
   });
 
+  it('should fall back to sync iteration when the Symbol.asyncIterator member is nullish (GetMethod parity)', async () => {
+    // for-await's GetMethod treats a null/undefined member as ABSENT and
+    // falls back to Symbol.iterator — presence-based dispatch used to throw.
+    const nullMember = {
+      // eslint-disable-next-line unicorn/no-null -- the nullish member is exactly the GetMethod case under test
+      [Symbol.asyncIterator]: null,
+      * [Symbol.iterator] () {
+        yield 'sync-a';
+        yield 'sync-b';
+      },
+    };
+    const undefinedMember = {
+      [Symbol.asyncIterator]: undefined,
+      * [Symbol.iterator] () {
+        yield 'sync-c';
+      },
+    };
+
+    /** @type {string[]} */
+    const collected = [];
+    // @ts-ignore — the nullish member is deliberately type-illegal
+    for await (const value of bufferedAsyncMap(nullMember, async (item) => item)) collected.push(value);
+    // @ts-ignore
+    for await (const value of bufferedAsyncMap(undefinedMember, async (item) => item)) collected.push(value);
+
+    collected.toSorted().should.deep.equal(['sync-a', 'sync-b', 'sync-c']);
+  });
+
+  it('should not fall back to sync iteration for a non-nullish non-callable member (GetMethod parity)', () => {
+    // GetMethod throws for non-callable non-nullish — for-await would NOT
+    // consume the sync protocol here, and neither do we.
+    should.Throw(() => {
+      bufferedAsyncMap(
+        // @ts-ignore
+        { [Symbol.asyncIterator]: 42, * [Symbol.iterator] () { yield 'never'; } },
+        async () => {}
+      );
+    }, TypeError, 'Expected asyncIterable to have a Symbol.asyncIterator function');
+  });
+
+  it('should read the Symbol.asyncIterator member exactly once (stateful getter cannot desync validation from use)', async () => {
+    let reads = 0;
+    const oneShot = {
+      get [Symbol.asyncIterator] () {
+        reads += 1;
+        // A function on the first read, garbage afterwards — pre-fix the
+        // typeof check consumed the good read and the invocation crashed
+        // with an unbranded TypeError.
+        return reads === 1
+          ? async function * () { yield 'one-shot'; }
+          : 42;
+      },
+    };
+
+    /** @type {string[]} */
+    const collected = [];
+    // @ts-ignore
+    for await (const value of bufferedAsyncMap(oneShot, async (item) => item)) collected.push(value);
+
+    collected.should.deep.equal(['one-shot']);
+    reads.should.equal(1);
+  });
+
   it('should throw the descriptive TypeError for a non-callable Symbol.asyncIterator member', () => {
     should.Throw(() => {
       bufferedAsyncMap(

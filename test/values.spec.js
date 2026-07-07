@@ -1299,13 +1299,42 @@ describe('bufferedAsyncMap() values', () => {
       chai.expect(() => {
         // eslint-disable-next-line unicorn/no-null -- a null element is exactly the malformed input under test
         mergeIterables([(async function * () { yield 1; })(), /** @type {*} */ (null)]);
-      }).to.throw(TypeError, 'Expected input[1] to be an (async) iterable or array');
+      }).to.throw(TypeError, 'Expected input[1] to have a callable Symbol.asyncIterator or Symbol.iterator');
 
       // Strings are iterable but char-splitting a merge element is almost
       // always a mistake — rejected with a pointer to the fix.
       chai.expect(() => {
         // @ts-ignore
         mergeIterables(['abc']);
+      }).to.throw(TypeError, /Expected input\[0\].*strings are not merged char-by-char/);
+
+      // Boxed strings too — they satisfy isObject and the iterable protocol,
+      // so they used to slip past the primitive check and silently char-split.
+      chai.expect(() => {
+        // eslint-disable-next-line no-new-wrappers, unicorn/new-for-builtins -- a boxed String is exactly the hostile element under test
+        mergeIterables([(new String('abc'))]);
+      }).to.throw(TypeError, /Expected input\[0\].*strings are not merged char-by-char/);
+
+      // Non-callable protocol members are rejected eagerly with their index —
+      // pre-fix they passed the presence check and surfaced minutes later as
+      // a deferred unbranded consume-time TypeError.
+      chai.expect(() => {
+        // @ts-ignore
+        mergeIterables([{ [Symbol.iterator]: 42 }]);
+      }).to.throw(TypeError, 'Expected input[0] to have a callable Symbol.asyncIterator or Symbol.iterator');
+    });
+
+    it('rejects a cross-realm boxed String element', async () => {
+      const { runInNewContext } = await import('node:vm');
+      const crossRealmBoxed = runInNewContext("new String('abc')");
+
+      // An instanceof-based check would miss this value (cross-realm
+      // prototype chain) — the brand check must still catch it (pre-fix it
+      // silently char-split).
+      // eslint-disable-next-line unicorn/no-instanceof-builtins -- asserting exactly the instanceof blind spot the brand check exists for
+      chai.expect(crossRealmBoxed instanceof String).to.equal(false);
+      chai.expect(() => {
+        mergeIterables([crossRealmBoxed]);
       }).to.throw(TypeError, /Expected input\[0\].*strings are not merged char-by-char/);
     });
 

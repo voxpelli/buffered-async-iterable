@@ -3,7 +3,7 @@
 import { findLeastTargeted } from './lib/find-least-targeted.js';
 import { arrayDeleteInPlace, makeIterableAsync, normalizeError } from './lib/misc.js';
 import {
-  isAsyncIterable, isIterable, isObject, isPartOfArray,
+  isAsyncIterable, isObject, isPartOfArray,
 } from './lib/type-checks.js';
 
 // Tags the internal catch-envelope produced when a source / sub-iterator
@@ -53,6 +53,26 @@ const safeStep = (iterator, onNextError) => {
 };
 
 /**
+ * Cross-realm-safe string detector: `instanceof String` misses boxed
+ * strings from another realm (node:vm), and Symbol.toStringTag makes the
+ * Object.prototype.toString brand spoofable — the String.prototype method
+ * brand check is the reliable probe.
+ *
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isString (value) {
+  if (typeof value === 'string') return true;
+  if (!value || typeof value !== 'object') return false;
+  try {
+    String.prototype.toString.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * @template T
  * @param {AsyncIterable<T> | Iterable<T> | T[]} item
  * @returns {AsyncIterable<T>}
@@ -69,15 +89,18 @@ async function * yieldIterable (item) {
  * see `bufferedAsyncMap` for the full semantics of each option.
  *
  * Note: construction is eager — the input array AND its elements are
- * validated at call time, not at first `.next()`. A bad element would
- * otherwise surface minutes later as a deferred fail-eventually TypeError
- * (possibly wrapped in an AggregateError) after every healthy source
- * drained. Strings are deliberately rejected even though they're iterable:
+ * validated at call time, not at first `.next()`. A bad element (including
+ * a non-callable protocol member) would otherwise surface minutes later as
+ * a deferred fail-eventually TypeError (possibly wrapped in an
+ * AggregateError) after every healthy source drained. Strings — primitive
+ * or boxed — are deliberately rejected even though they're iterable:
  * merging 'abc' as the chars 'a','b','c' is almost always a caller mistake
- * — spread the string explicitly if chars are wanted.
+ * — spread the string explicitly if chars are wanted. The protocol member
+ * is read once here and re-read at iteration; elements with exotic one-shot
+ * getter members are unsupported, same as the main input.
  *
  * @template T
- * @param {Array<AsyncIterable<T> | Iterable<T> | T[]>} input
+ * @param {Array<AsyncIterable<T> | (Iterable<T> & object) | T[]>} input
  * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined }} [options]
  * @returns {BufferedAsyncIterableIterator<T>}
  */
@@ -85,10 +108,22 @@ export function mergeIterables (input, options) {
   if (!Array.isArray(input)) throw new TypeError('Expected input to be an array of iterables');
 
   for (const [i, item] of input.entries()) {
-    // Strings fail these guards too (they're iterable but not objects) —
-    // intentional, see the docblock.
-    if (!isAsyncIterable(item) && !isIterable(item) && !Array.isArray(item)) {
-      throw new TypeError(`Expected input[${i}] to be an (async) iterable or array${typeof item === 'string' ? ' — strings are not merged char-by-char, spread the string first if that is intended' : ''}`);
+    if (isString(item)) {
+      throw new TypeError(`Expected input[${i}] to be an (async) iterable or array — strings are not merged char-by-char, spread the string first if that is intended`);
+    }
+
+    // GetMethod-faithful eager callability: a nullish Symbol.asyncIterator
+    // member falls back to Symbol.iterator (matching for-await), a
+    // non-nullish non-callable member is rejected NOW with its index instead
+    // of surfacing later as an unbranded consume-time TypeError.
+    // eslint-disable-next-line unicorn/no-null -- `== null` is the nullish guard (GetMethod: null and undefined mean absent)
+    const asyncM = item == null ? undefined : /** @type {{ [Symbol.asyncIterator]?: unknown }} */ (item)[Symbol.asyncIterator];
+    // eslint-disable-next-line unicorn/no-null -- see above
+    if (asyncM == null
+      // eslint-disable-next-line unicorn/no-null -- see above
+      ? typeof (item == null ? undefined : /** @type {{ [Symbol.iterator]?: unknown }} */ (item)[Symbol.iterator]) !== 'function'
+      : typeof asyncM !== 'function') {
+      throw new TypeError(`Expected input[${i}] to have a callable Symbol.asyncIterator or Symbol.iterator`);
     }
   }
 
@@ -122,7 +157,7 @@ export function mergeIterables (input, options) {
  *
  * @template T
  * @template R
- * @param {AsyncIterable<T> | Iterable<T> | T[]} input
+ * @param {AsyncIterable<T> | (Iterable<T> & object) | T[]} input
  * @param {(item: T, opts: { signal: AbortSignal }) => (Promise<R>|AsyncIterable<R>)} callback
  * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined }} [options]
  * @returns {BufferedAsyncIterableIterator<R>}
@@ -141,18 +176,32 @@ export function bufferedAsyncMap (input, callback, options) {
     signal: externalSignal,
   } = options || {};
 
-  // Async iteration is preferred when the input implements both protocols —
-  // matching for-await's GetIterator(async) order; the sync-iterable wrap is
-  // only for inputs with no async protocol at all.
-  /** @type {AsyncIterable<T, void, void>} */
-  const asyncIterable = (!isAsyncIterable(input) && (isIterable(input) || Array.isArray(input)))
-    ? makeIterableAsync(/** @type {Iterable<T> | T[]} */ (input))
-    : /** @type {AsyncIterable<T, void, void>} */ (input);
-
+  // The falsy-input guard must precede the member reads below (reading a
+  // symbol off null would throw unbranded).
   if (!input) throw new TypeError('Expected input to be provided');
-  // `in`-presence alone isn't enough — a non-callable Symbol.asyncIterator
-  // member would otherwise escape with an unbranded TypeError at invocation.
-  if (!isAsyncIterable(asyncIterable) || typeof asyncIterable[Symbol.asyncIterator] !== 'function') throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
+
+  // GetMethod semantics, matching for-await's GetIterator(async) exactly:
+  // ONE [[Get]] of the member (no `in` probe — a Proxy has/get trap pair can
+  // desync presence from value), nullish means absent (fall back to the sync
+  // protocol), a non-nullish non-callable member throws, and the CAPTURED
+  // method is invoked — so a stateful getter can't swap it between
+  // validation and use. String primitives are the one deliberate divergence
+  // (rejected; for-await would char-split); a boxed String object passed AS
+  // THE INPUT still iterates chars, matching for-await — only mergeIterables
+  // ELEMENTS reject boxed strings, where heterogeneous arrays make
+  // accidental strings likely.
+  const asyncMethod = /** @type {{ [Symbol.asyncIterator]?: unknown }} */ (input)[Symbol.asyncIterator];
+  // eslint-disable-next-line unicorn/no-null -- `!= null` is the nullish guard (GetMethod: null and undefined mean absent)
+  if (asyncMethod != null && typeof asyncMethod !== 'function') throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
+
+  /** @type {unknown} */
+  let syncMethod;
+  if (typeof asyncMethod !== 'function') {
+    if (typeof input === 'string') throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
+    syncMethod = /** @type {{ [Symbol.iterator]?: unknown }} */ (input)[Symbol.iterator];
+    if (typeof syncMethod !== 'function') throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
+  }
+
   if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');
   if (!Number.isInteger(bufferSize) || bufferSize < 1) throw new TypeError('Expected bufferSize to be a positive integer');
   // 2147483647 = Node's TIMEOUT_MAX (2^31-1): setTimeout silently clamps
@@ -164,8 +213,16 @@ export function bufferedAsyncMap (input, callback, options) {
   if (externalSignal !== undefined && !(externalSignal instanceof AbortSignal)) throw new TypeError('Expected signal to be an AbortSignal');
   if (errorsMode !== 'fail-eventually' && errorsMode !== 'fail-fast') throw new TypeError("Expected errors to be 'fail-eventually' or 'fail-fast'");
 
+  // Invocation happens only after every validation above has passed — the
+  // captured method (never a re-read of the input) is what gets called. The
+  // sync-arm shim re-invokes the captured method too, so the input object is
+  // read exactly once, same as for-await.
   /** @type {AsyncIterator<T, void, void>} */
-  const asyncIterator = asyncIterable[Symbol.asyncIterator]();
+  const asyncIterator = typeof asyncMethod === 'function'
+    ? /** @type {AsyncIterator<T, void, void>} */ (asyncMethod.call(input))
+    : makeIterableAsync({
+      [Symbol.iterator]: () => /** @type {() => Iterator<T>} */ (syncMethod).call(input),
+    })[Symbol.asyncIterator]();
 
   /** @type {AsyncIterator<R, void, void>[]} */
   const subIterators = [];
