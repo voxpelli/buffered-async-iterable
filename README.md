@@ -18,6 +18,28 @@ Buffered parallel processing of async iterables / generators.
 [![neostandard javascript style](https://img.shields.io/badge/code_style-neostandard-7fffff?style=flat&labelColor=ff80ff)](https://github.com/neostandard/neostandard)
 [![Follow @voxpelli@mastodon.social](https://img.shields.io/mastodon/follow/109247025527949675?domain=https%3A%2F%2Fmastodon.social&style=social)](https://mastodon.social/@voxpelli)
 
+## Why
+
+A plain `for await` loop processes one item at a time — with an IO-bound body
+each item waits for the previous one's network/database round-trip.
+Array-based concurrency helpers (`p-map` and friends) run callbacks in
+parallel but need the whole input materialised up front, which doesn't fit
+streams, paginated APIs, database cursors or other unbounded sources.
+
+`bufferedAsyncMap` sits in between: it maps an async callback over any
+(async) iterable, keeping up to `bufferSize` items in flight at once while
+pulling from the source only as fast as the buffer drains — bounded memory
+and backpressure included. Results are yielded as they resolve (or in source
+order with `ordered: true`), errors and cancellation follow
+native-`AsyncGenerator` semantics, and cleanup is guaranteed through
+`return()` / `Symbol.asyncDispose`.
+
+Reach for something else when:
+
+* **The input is already a reasonably-sized array** and you just want
+  concurrency — an array helper like `p-map` is simpler.
+* **The callback is synchronous or trivially cheap** — buffering costs more
+  than it saves; a plain loop wins (see [Performance](#performance)).
 
 ## Usage
 
@@ -26,16 +48,23 @@ Buffered parallel processing of async iterables / generators.
 ```javascript
 import { bufferedAsyncMap } from 'buffered-async-iterable';
 
-async function * asyncGenerator() {
-  yield ...
+// A paginated source — yields ids one page at a time
+async function * allUserIds () {
+  let page = 1, batch;
+  do {
+    batch = await (await fetch(`https://api.example.com/users?page=${page++}`)).json();
+    yield * batch.ids;
+  } while (batch.hasMore);
 }
 
-const mappedIterator = bufferedAsyncMap(asyncGenerator(), async (item) => {
-  // Apply additional async lookup / processing
+// Look up each user, up to 6 (the default bufferSize) requests in flight
+const users = bufferedAsyncMap(allUserIds(), async (id) => {
+  const res = await fetch(`https://api.example.com/users/${id}`);
+  return res.json();
 });
 
-for await (const item of mappedIterator) {
-  // Consume the buffered async iterable
+for await (const user of users) {
+  console.log(user.name); // Yielded as they resolve, not in source order
 }
 ```
 
@@ -65,37 +94,45 @@ A plain `for await … of` already closes the iterator on `break`/`throw` by its
 import { bufferedAsyncMap } from 'buffered-async-iterable';
 
 const results = await Array.fromAsync(bufferedAsyncMap(input, async (item) => {
-  // Apply additional async lookup / processing
+  return lookup(item);
 }));
 ```
 
-### Array input
+### Fanning out — async generator callbacks
+
+A callback can be an async generator; everything it yields is merged into the
+main stream, load-balanced against the source and any other in-flight
+generators:
 
 ```javascript
 import { bufferedAsyncMap } from 'buffered-async-iterable';
 
-const mappedIterator = bufferedAsyncMap(['foo'], async (item) => {
-  // Apply additional async lookup / processing
+const allFiles = bufferedAsyncMap(topLevelDirs, async function * (dir) {
+  for (const entry of await readdir(dir)) {
+    yield `${dir}/${entry}`;
+  }
 });
 
-for await (const item of mappedIterator) {
-  // Consume the buffered async iterable
+for await (const file of allFiles) {
+  console.log(file);
 }
 ```
 
-### Async generator result
+The input can just as well be a plain array or any sync iterable — `bufferedAsyncMap(['a', 'b'], …)` works the same way.
+
+### Merging iterables
 
 ```javascript
-import { bufferedAsyncMap } from 'buffered-async-iterable';
+import { mergeIterables } from 'buffered-async-iterable';
 
-const mappedIterator = bufferedAsyncMap(['foo'], async function * (item) {
-  // Apply additional async lookup / processing
-  yield ...
-  yield * ...
-});
+const merged = mergeIterables([
+  tailLogFile('a.log'),
+  tailLogFile('b.log'),
+  ['startup-marker'],
+]);
 
-for await (const item of mappedIterator) {
-  // Consume the buffered async iterable
+for await (const line of merged) {
+  console.log(line); // Lines from all sources, interleaved as they arrive
 }
 ```
 
@@ -111,23 +148,22 @@ Iterates and applies the `callback` to up to `bufferSize` items from `input` yie
 
 The returned `BufferedAsyncIterableIterator` type (exported in the type declarations) is an `AsyncIterableIterator` that additionally guarantees `return()`, `throw()` and `[Symbol.asyncDispose]()` to be present.
 
-Semantics worth knowing:
+Two things worth knowing up front (the full contract lives in [Advanced semantics](ADVANCED.md)):
 
-* **Construction starts work immediately.** Up to `bufferSize` items are pulled and their callbacks dispatched before the first `.next()` — that is the prefetching the library exists for. Construct close to consumption, and pair early construction with `await using` (or an explicit `return()`) so an error before the loop doesn't strand in-flight work.
-* **No two-way communication.** Values passed to `next(v)` are ignored (buffering decouples consumer pulls from source pulls), and `throw(err)` always terminates the iterator — it is never forwarded to the source, so a source generator cannot `try/catch` around its `yield` and recover.
-* **Same-realm instances.** `options.signal` must be an `AbortSignal` from the current realm (`instanceof` check), and error identity (fail-fast, single-error fail-eventually) assumes errors are same-realm `Error` instances — cross-realm errors (`node:vm`, some worker setups) get wrapped with the original on `.cause`.
+* **Construction starts work immediately.** Up to `bufferSize` items are pulled and their callbacks dispatched before the first `.next()` — that is the prefetching the library exists for. Construct close to consumption, or pair early construction with `await using` so an error before the loop doesn't strand in-flight work.
+* **No two-way communication.** Values passed to `next(v)` are ignored, and `throw(err)` terminates the iterator rather than being forwarded to the source.
 
 #### Arguments
 
 * `input` – either an async iterable, an ordinary iterable or an array
-* `callback(item, { signal })` – should be either an async generator or an ordinary async function. Items from async generators are buffered in the main buffer and the buffer is refilled by the one that has least items in the current buffer (`input` is considered equal to sub iterators in this regard when refilling the buffer). The second argument is an `{ signal: AbortSignal }` that aborts on cancellation — see [Cancellation](#cancellation).
+* `callback(item, { signal })` – an async function or an async generator. Values from async-generator callbacks are merged into the main stream (the buffer is refilled from whichever iterator — the input included — has the fewest items in flight). The second argument's `signal` aborts on cancellation — see [Cancellation](#cancellation).
 
 #### Options
 
-* `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultaneous items processed at once in the buffer. Any positive integer is accepted, but very large buffers pay an O(bufferSize) cost per unordered pull (the internal race spans the whole buffer) — sizes in the tens of thousands work (the regression spec pins 20 000), they just don't scale linearly. Prefetching is speculative: up to `bufferSize` concurrent `next()` calls can be in flight before an earlier one has resolved `done` (once `done` **has** resolved, the source is never pulled again). Async-generator sources handle that natively — their request queue serializes the calls and they answer trailing pulls with `done` forever. A hand-rolled iterator that *throws* on concurrent or trailing `next()` calls should use `bufferSize: 1` or be wrapped in an async generator.
-* `cleanupTimeout` – _optional_ – a number of milliseconds to wait for the source iterator's `.return()` before giving up. Defaults to no timeout (await forever) — match `AsyncGenerator`. Useful when the source might hang and you don't want abort/return/dispose to wait for it. See [Cancellation](#cancellation).
+* `bufferSize` – _optional_ – defaults to `6`, the max number of items processed simultaneously. Prefetching is speculative — up to `bufferSize` concurrent `next()` calls can be in flight before one resolves `done` (after which the source is never pulled again); async-generator sources serialize those natively, but a hand-rolled iterator that throws on concurrent pulls should use `bufferSize: 1`. Very large buffers pay an O(bufferSize) cost per unordered pull. Details in [Advanced semantics](ADVANCED.md#construction-and-the-prefetch-model).
+* `cleanupTimeout` – _optional_ – a millisecond cap on how long close/abort waits for the source's `.return()` to settle. Defaults to no timeout (await forever), matching `AsyncGenerator`. See [Cancellation](#cancellation).
 * `ordered` – _optional_ – defaults to `false`, when `true` the result will be returned in order instead of unordered.
-* `signal` – _optional_ – an `AbortSignal`. When aborted, iteration stops pulling from the source, the next pending or freshly-called `iterator.next()` rejects with `signal.reason` exactly once — unless the consumer has already closed the iterator via `return()`/`throw()`/`Symbol.asyncDispose`, in which case the abort is suppressed and `next()` resolves `{ done: true }`, matching native `AsyncGenerator`. All subsequent calls return `{ done: true, value: undefined }`. See [Cancellation](#cancellation).
+* `signal` – _optional_ – an `AbortSignal`. When aborted, the next `iterator.next()` rejects with `signal.reason` exactly once and all later calls resolve `{ done: true, value: undefined }`. See [Cancellation](#cancellation).
 * `errors` – _optional_ – defaults to `'fail-eventually'`. Controls how errors from the callback or the source surface to the consumer. See [Errors](#errors).
 
 The returned iterator also implements `Symbol.asyncDispose`, so it can be used with `await using` for deterministic cleanup. See [Resource management](#resource-management).
@@ -173,7 +209,7 @@ try {
 }
 ```
 
-Aborting cancels *consumption* of the source. In-flight callbacks continue running until they settle. To cancel network/IO inside your callback, forward the per-callback `signal` (the second argument) into `fetch`/`undici`/etc:
+Aborting cancels *consumption* of the source: the next `iterator.next()` rejects with `signal.reason` exactly once (after the source's cleanup has run), and every later call resolves `{ done: true }`. In-flight callbacks continue running until they settle — to cancel network/IO inside your callback, forward the per-callback `signal` (the second argument, always present even without `options.signal`; it aborts on any iterator close) into `fetch`/`undici`/etc:
 
 ```javascript
 bufferedAsyncMap(source, async (item, { signal }) => {
@@ -182,11 +218,7 @@ bufferedAsyncMap(source, async (item, { signal }) => {
 }, { signal: ac.signal });
 ```
 
-The per-callback `signal` is always present (even when no `options.signal` is passed) and aborts on iterator close (return / throw / dispose / source-exhaustion-with-cleanup), so callbacks can fast-path on shutdown. Callbacks observe `signal.aborted === true` within one microtask of iterator close — they continue running (Promises are not cancellable) until they reach the next `await` of something signal-aware (`fetch`, `undici`, etc.) or until they voluntarily exit via a check on `signal.aborted`.
-
-If `options.signal` is already aborted at construction time, the source is never read and the first `iterator.next()` rejects with `signal.reason` (unless the consumer closes the iterator before ever pulling — an undelivered abort is suppressed by an explicit close). External abort takes precedence over queued / not-yet-captured errors; see [Errors](#errors) for the one committed-fail-fast exception.
-
-Abort delivery waits for the source to finish closing: the rejecting `iterator.next()` only settles after the source's `.return()` (its `finally` blocks) has run — the same guarantee `for await`/`await using` give you on normal completion. If the source might hang inside `.return()` (for example a native async generator whose `finally` block awaits an unsettled promise), set `cleanupTimeout` to put an upper bound on how long that wait can take. The pending source promises are abandoned (not cancellable) but the consumer unblocks:
+If the source might hang inside its `.return()` cleanup, set `cleanupTimeout` to bound how long abort/close waits for it:
 
 ```javascript
 for await (const item of bufferedAsyncMap(maybeWedgedSource, fn, {
@@ -195,22 +227,19 @@ for await (const item of bufferedAsyncMap(maybeWedgedSource, fn, {
 })) { /* … */ }
 ```
 
+The finer points — pre-aborted signals, abort-vs-error precedence, the exactly-once contract's interaction with explicit `return()`, per-callback signal timing — are specified in [Advanced semantics](ADVANCED.md#cancellation-in-depth).
+
 ## Errors
 
 There are two error modes:
 
 ### `'fail-eventually'` (default)
 
-After the first error from the callback or the source, no further items are pulled from the source. Items already in flight when the error was captured continue to drain — their successful values still surface to the consumer, and any further errors among them are also captured. When the buffer empties, the captured errors are thrown:
-
-* If exactly one error was captured, it is thrown directly (identity preserved).
-* If two or more errors were captured, they are wrapped in an [`AggregateError`](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) (in capture order).
-
-In-flight callbacks may still complete in the background after an error is captured. Wrap your callback in `try/catch` if you need per-item isolation.
+After the first error from the callback or the source, no further items are pulled from the source. Items already in flight continue to drain — their successful values still surface. When the buffer empties, the captured errors are thrown: a single error is thrown directly (identity preserved), two or more are wrapped in an [`AggregateError`](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) (in capture order). Wrap your callback in `try/catch` if you need per-item isolation.
 
 ### `'fail-fast'`
 
-Mirrors `Promise.all` semantics: the first error from the callback or the source short-circuits iteration. The next `iterator.next()` rejects with the original error (no `AggregateError` wrapping); subsequent calls return `{ done: true }`. The source's `.next()` is not called again, the source's `.return()` is called once, and in-flight callbacks observe `signal.aborted === true` on their per-callback signal within one microtask.
+Mirrors `Promise.all` semantics: the first error from the callback or the source short-circuits iteration. The next `iterator.next()` rejects with the original error (no `AggregateError` wrapping); subsequent calls return `{ done: true }`. The source's `.next()` is not called again, its `.return()` is called once, and in-flight callbacks observe an aborted per-callback signal.
 
 ```javascript
 for await (const item of bufferedAsyncMap(source, fn, { errors: 'fail-fast' })) {
@@ -218,7 +247,7 @@ for await (const item of bufferedAsyncMap(source, fn, { errors: 'fail-fast' })) 
 }
 ```
 
-External abort takes precedence over **queued / not-yet-captured** errors: if `options.signal` aborts while fail-eventually errors sit captured, the consumer sees `signal.reason`, not the captured errors. The one exception is a fail-fast error already committed as the shutdown reason — once fail-fast has begun closing the iterator, its error wins (first event wins) and an abort landing mid-cleanup is a no-op.
+External abort takes precedence over captured-but-not-yet-thrown errors; the exact precedence rules (and how malformed source results are surfaced) are specified in [Advanced semantics](ADVANCED.md#errors-in-depth).
 
 ## Resource management
 
@@ -244,24 +273,25 @@ Both `bufferedAsyncMap` and `mergeIterables` return this same iterator shape.
 
 `npm run bench` runs a [mitata](https://github.com/evanwashere/mitata) suite covering the main design decisions. The findings:
 
-* **There is a per-item buffering tax.** Routing values through `bufferedAsyncMap` still costs more than a bare `for await` loop — roughly **20–25×** on synchronous-ish work. The library pays for itself when the callback is genuinely async / IO-bound and benefits from prefetching up to `bufferSize` items in parallel — for trivial synchronous transforms, a plain loop wins.
+* **There is a per-item buffering tax.** Routing values through `bufferedAsyncMap` costs more than a bare `for await` loop — roughly **20–25×** on synchronous-ish work. The library pays for itself when the callback is genuinely async / IO-bound and benefits from prefetching up to `bufferSize` items in parallel — for trivial synchronous transforms, a plain loop wins.
 * **`bufferSize` is a throughput/overhead trade-off.** Larger buffers keep more work in flight but cost more per pull (the internal `Promise.race` grows with the buffer). The default of `6` is a reasonable midpoint.
 * **The optional machinery is effectively free.** Passing `options.signal`, choosing an `errors` mode, feeding a sync iterable or array instead of an async generator, and using `mergeIterables` instead of a direct call all measure within a few percent of the base case.
+* **Long streams don't accumulate memory.** Retention on unbounded streams is ~0 bytes per item, guarded by `test/memory.spec.js` — see [Advanced semantics](ADVANCED.md#memory-guarantees).
 
-### Changes vs. earlier 2.0.0 pre-release builds
+These ratios are *indicative of the shape of the cost* — measured on the maintainer's machine, not a benchmark report. `npm run bench` reproduces them locally; `npm run bench:json` captures a JSON snapshot for before/after diffing.
 
-Two optimisations during the 2.0.0 cycle, each guarded by the benchmark suite:
+## Advanced semantics
 
-* **Skip the load-balancer when there are no sub-iterators.** `fillQueue` no longer runs the `findLeastTargeted` load-balancer (a `Map` allocation + a per-item scan) on the common path where the callback returns plain values — it only runs once a nested async-generator callback actually creates a sub-iterator. ~10–15% faster throughput.
-* **Per-pull abort "park" instead of a long-lived race promise.** `nextValue` previously raced every pull against a single abort promise that never settled until the iterator closed — which left a `Promise` reaction record per item ([nodejs/node#51452](https://github.com/nodejs/node/issues/51452)), a real memory-retention issue on long-lived/unbounded streams. It now races a fresh, collectable per-pull "park" instead. This both removes the retention (≈0 vs ≈530 bytes/item on an unbounded stream — see `test/memory.spec.js`) and, by keeping the live-object set small during iteration, cuts GC pressure enough for a further ~20–40% throughput gain.
-
-Net: throughput is **~25–45% faster** than the first 2.0.0 pre-release across the buffered-map, ordered/unordered, `bufferSize`, input-shape and `mergeIterables` benchmarks, with no regression in the abort/error paths and the long-stream memory retention eliminated.
-
-These ratios are *indicative of the shape of the cost* — measured on the maintainer's machine, not a benchmark report. `npm run bench` reproduces them locally; `npm run bench:json` captures a JSON snapshot for before/after diffing. See `CLAUDE.md` for the methodology.
+The precise contracts — prefetch model, iterator-protocol details, abort
+delivery, error precedence, memory guarantees — are documented in
+[ADVANCED.md](ADVANCED.md). Everything there is pinned by the test
+suite.
 
 ## Similar modules
 
-* [`hwp`](https://github.com/mcollina/hwp) – similar module by [@mcollina](https://github.com/mcollina)
+* [`hwp`](https://github.com/mcollina/hwp) – iterates over an async iterable with concurrency, like this module; no nested-generator fan-out, merge helper or buffer load-balancing
+* [`p-map`](https://github.com/sindresorhus/p-map) – concurrent async mapping over *arrays/fixed collections* rather than streams
+* Node's [`ReadableStream.prototype.pipeThrough`](https://nodejs.org/api/webstreams.html) / [`stream.pipeline`](https://nodejs.org/api/stream.html) – heavier-weight streaming with transforms, when you're already in stream land
 
 <!-- ## See also
 
