@@ -164,6 +164,27 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {{ reason: unknown, delivered: boolean } | undefined} */
   let abortReason;
 
+  /**
+   * Single writer for the abort pairing: records the consumer-facing
+   * abortReason (first writer wins) and aborts the internal controller with
+   * the same reason — keeping the per-callback signal's reason and the
+   * consumer-facing rejection from ever diverging. Every abort source
+   * (pre-aborted signal, external abort, first fail-fast error) goes
+   * through here.
+   *
+   * @param {unknown} reason
+   * @returns {{ reason: unknown, delivered: boolean }} the winning record
+   */
+  const requestConsumerAbort = (reason) => {
+    if (!abortReason) {
+      abortReason = { reason, delivered: false };
+    }
+    if (!internalAbortController.signal.aborted) {
+      internalAbortController.abort(reason);
+    }
+    return abortReason;
+  };
+
   if (externalSignal) {
     // AbortSignal.reason is typed `any` in the DOM lib; widen it to `unknown`
     // locally so callers don't inherit the `any` (and so type-coverage stays
@@ -171,8 +192,7 @@ export function bufferedAsyncMap (input, callback, options) {
     /** @type {Omit<AbortSignal, 'reason'> & { reason: unknown }} */
     const safeSignal = externalSignal;
     if (safeSignal.aborted) {
-      abortReason = { reason: safeSignal.reason, delivered: false };
-      internalAbortController.abort(safeSignal.reason);
+      requestConsumerAbort(safeSignal.reason);
     } else {
       // `signal:` ties the listener's lifetime to the internal controller,
       // which markAsEnded always aborts — so a closed iterator detaches from
@@ -183,12 +203,7 @@ export function bufferedAsyncMap (input, callback, options) {
       safeSignal.addEventListener('abort', () => {
         // If the iterator already closed via return()/throw()/dispose, abort is too late: no-op.
         if (isDone) return;
-        if (!abortReason) {
-          abortReason = { reason: safeSignal.reason, delivered: false };
-        }
-        if (!internalAbortController.signal.aborted) {
-          internalAbortController.abort(safeSignal.reason);
-        }
+        requestConsumerAbort(safeSignal.reason);
       }, { once: true, signal: internalAbortController.signal });
     }
   }
@@ -540,35 +555,46 @@ export function bufferedAsyncMap (input, callback, options) {
   };
 
   /**
+   * The one abort-delivery sequence, shared by nextValue's pre-race and
+   * post-race sites: consume the pending descriptor, run (or await the
+   * in-flight) cleanup, then throw the reason or resolve done. Also handles
+   * the no-descriptor wake (a park resolved by a plain close): plain
+   * cleanup-then-done.
+   *
+   * @returns {Promise<IteratorResult<R, undefined>>}
+   */
+  const deliverAbort = async () => {
+    const handled = handleAbortIfPending();
+    await markAsEnded();
+    if (handled?.kind === 'throw') throw handled.reason;
+    return { done: true, value: undefined };
+  };
+
+  /**
    * Routes a stream error — from the source, the callback, or a malformed
-   * sub-iterable — through the configured error mode. In `fail-fast` mode the
-   * first error short-circuits iteration via the abort machinery: this either
-   * throws the reason or returns the terminal `{ done: true }`. In
-   * `fail-eventually` mode it captures the error and returns `undefined`, so
-   * the caller keeps draining.
+   * sub-iterable — through the configured error mode. In `fail-fast` mode
+   * the first error short-circuits iteration via the abort machinery and
+   * this THROWS the original error (that rejection is the exactly-once
+   * delivery: nothing else can deliver during the markAsEnded await, since
+   * delivery is single-flight on the currentStep chain). In
+   * `fail-eventually` mode it captures the error and returns, so the caller
+   * keeps draining.
    *
    * @param {Error} normalizedErr
-   * @returns {Promise<{ done: true, value: undefined } | undefined>}
+   * @returns {Promise<void>}
    */
   const handleStreamError = async (normalizedErr) => {
     // In fail-fast mode the first captured error short-circuits iteration:
     // route it through the same abort machinery so the next .next() rejects
     // with the original error and in-flight callbacks see signal.aborted=true.
     if (errorsMode === 'fail-fast' && !abortReason) {
-      abortReason = { reason: normalizedErr, delivered: false };
-      if (!internalAbortController.signal.aborted) {
-        internalAbortController.abort(normalizedErr);
-      }
+      const pending = requestConsumerAbort(normalizedErr);
       await markAsEnded();
-      if (abortReason && !abortReason.delivered) {
-        abortReason.delivered = true;
-        throw normalizedErr;
-      }
-      return { done: true, value: undefined };
+      pending.delivered = true;
+      throw normalizedErr;
     }
 
-    // fail-eventually: capture and fall through — implicit `undefined` return
-    // tells the caller to keep draining. Lint rejects an explicit `return`.
+    // fail-eventually: capture and fall through — the caller keeps draining.
     capturedErrors.push(normalizedErr);
   };
 
@@ -579,14 +605,7 @@ export function bufferedAsyncMap (input, callback, options) {
   // reads an argument) so it can be passed straight to currentStep.then().
   /** @type {() => Promise<IteratorResult<R>>} */
   const nextValue = async () => {
-    {
-      const earlyAbort = handleAbortIfPending();
-      if (earlyAbort) {
-        await markAsEnded();
-        if (earlyAbort.kind === 'throw') throw earlyAbort.reason;
-        return { done: true, value: undefined };
-      }
-    }
+    if (abortReason) return deliverAbort();
 
     const nextBufferedPromise = bufferedPromises[0];
 
@@ -622,10 +641,7 @@ export function bufferedAsyncMap (input, callback, options) {
     currentPark = undefined;
 
     if (raced === ABORT_SENTINEL || abortReason) {
-      const handled = handleAbortIfPending();
-      await markAsEnded();
-      if (handled?.kind === 'throw') throw handled.reason;
-      return { done: true, value: undefined };
+      return deliverAbort();
     }
 
     /** @type {Awaited<BufferPromise>} */
@@ -669,8 +685,8 @@ export function bufferedAsyncMap (input, callback, options) {
       return markAsEnded();
     } else if (err || done) {
       if (err) {
-        const handled = await handleStreamError(normalizeError(err, 'Unknown error'));
-        if (handled) return handled;
+        // Throws in fail-fast delivery; captures and returns in fail-eventually
+        await handleStreamError(normalizeError(err, 'Unknown error'));
       }
 
       return drainOrContinue();
@@ -684,8 +700,7 @@ export function bufferedAsyncMap (input, callback, options) {
         // The callback returned a malformed async iterable — the
         // Symbol.asyncIterator property exists but invoking it threw.
         // Surface it like any other stream error.
-        const handled = await handleStreamError(normalizeError(subIterableErr, 'Unknown sub-iterator error'));
-        if (handled) return handled;
+        await handleStreamError(normalizeError(subIterableErr, 'Unknown sub-iterator error'));
         return drainOrContinue();
       }
 
