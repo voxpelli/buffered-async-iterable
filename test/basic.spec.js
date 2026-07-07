@@ -96,6 +96,20 @@ describe('bufferedAsyncMap() basic', () => {
     }
   });
 
+  it('should throw eagerly when the Symbol.asyncIterator method returns a non-object', () => {
+    // GetIteratorFromMethod parity: native for-await throws an immediate
+    // TypeError ('Result of the Symbol.asyncIterator method is not an
+    // object'). Pre-fix the null iterator entered the pipeline and
+    // surfaced later as a deferred, unbranded AggregateError.
+    should.Throw(() => {
+      bufferedAsyncMap(
+        // eslint-disable-next-line unicorn/no-null -- the non-object iterator is exactly the case under test
+        /** @type {*} */ ({ [Symbol.asyncIterator]: () => null }),
+        async () => {}
+      );
+    }, TypeError, 'Expected the Symbol.asyncIterator method to return an object');
+  });
+
   it('should prefer async iteration when the input implements both protocols', async () => {
     // for-await's GetIterator(async) prefers Symbol.asyncIterator; the
     // library must consume the same sequence — pre-fix the sync-iterable

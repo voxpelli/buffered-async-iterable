@@ -224,11 +224,22 @@ export function bufferedAsyncMap (input, callback, options) {
   // sync-arm shim re-invokes the captured method too, so the input object is
   // read exactly once, same as for-await.
   /** @type {AsyncIterator<T, void, void>} */
-  const asyncIterator = typeof asyncMethod === 'function'
-    ? /** @type {AsyncIterator<T, void, void>} */ (asyncMethod.call(input))
-    : makeIterableAsync({
+  let asyncIterator;
+  if (typeof asyncMethod === 'function') {
+    const candidate = asyncMethod.call(input);
+    // GetIteratorFromMethod parity: native for-await throws right here for
+    // a non-object iterator; entering the pipeline instead would surface it
+    // later as a deferred, unbranded stream error. The sync arm has no such
+    // eager check — its captured method is invoked lazily inside the shim
+    // (eager invocation would add a construction-time side effect) and for-of
+    // brands its own TypeError there.
+    if (!isSpecObject(candidate)) throw new TypeError('Expected the Symbol.asyncIterator method to return an object');
+    asyncIterator = /** @type {AsyncIterator<T, void, void>} */ (candidate);
+  } else {
+    asyncIterator = makeIterableAsync({
       [Symbol.iterator]: () => /** @type {() => Iterator<T>} */ (syncMethod).call(input),
     })[Symbol.asyncIterator]();
+  }
 
   /** @type {AsyncIterator<R, void, void>[]} */
   const subIterators = [];
