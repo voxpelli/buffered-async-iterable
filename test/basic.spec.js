@@ -83,6 +83,40 @@ describe('bufferedAsyncMap() basic', () => {
     }
   });
 
+  it('should support very large bufferSize values', async () => {
+    // The refill loop is iterative; the previous tail self-recursion put
+    // O(bufferSize) frames on the stack during the construction-time fill
+    // and crashed with RangeError at bufferSize ≈7000.
+    //
+    // Deliberately NOT exercised here: an async-generator source (V8's
+    // generator request queue makes N eagerly-enqueued next() calls
+    // quadratic — external to this library) and a full for-await drain
+    // (walks the ~100k exhausted-source slots one race at a time). Both are
+    // pre-existing costs of huge buffers, not what this spec pins.
+    const values = ['a', 'b', 'c'];
+    let i = 0;
+    /** @type {AsyncIterable<string>} */
+    const source = {
+      [Symbol.asyncIterator]: () => ({
+        next: async () => i < values.length
+          ? { done: false, value: /** @type {string} */ (values[i++]) }
+          : { done: true, value: undefined },
+      }),
+    };
+
+    const iterator = bufferedAsyncMap(source, async (item) => item, { bufferSize: 100_000 });
+
+    /** @type {string[]} */
+    const collected = [];
+    for (let j = 0; j < 3; j++) {
+      const { value } = await iterator.next();
+      if (value !== undefined) collected.push(value);
+    }
+    await iterator.return();
+
+    collected.sort().should.deep.equal(['a', 'b', 'c']);
+  });
+
   it('should return an AsyncIterable when provided with required arguments', () => {
     const asyncIterable = (async function * () {})();
     const bufferedAsyncIterable = bufferedAsyncMap(

@@ -338,9 +338,20 @@ export function bufferedAsyncMap (input, callback, options) {
   // starvation — but only once a sub-iterator actually exists, since with
   // none there is nothing to balance and the main iterator is the only
   // source.
+  //
+  // Iterative on purpose: the refill was previously a tail self-recursion,
+  // which put O(bufferSize) frames on the stack during the construction-time
+  // fill — RangeError at bufferSize ≈7000 on stock Node, while validation
+  // happily accepts any positive integer.
   const fillQueue = () => {
-    if (capturedErrors.length > 0 || isDone || abortReason) return;
+    while (bufferedPromises.length < bufferSize) {
+      if (capturedErrors.length > 0 || isDone || abortReason) return;
 
+      fillOneSlot();
+    }
+  };
+
+  const fillOneSlot = () => {
     /** @type {AsyncIterator<R, void, void>|undefined} */
     let currentSubIterator;
 
@@ -470,10 +481,6 @@ export function bufferedAsyncMap (input, callback, options) {
       bufferedPromises.splice(i, 0, bufferPromise);
     } else {
       bufferedPromises.push(bufferPromise);
-    }
-
-    if (bufferedPromises.length < bufferSize) {
-      fillQueue();
     }
   };
 
