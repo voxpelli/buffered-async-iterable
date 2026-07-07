@@ -528,10 +528,13 @@ export function bufferedAsyncMap (input, callback, options) {
     while (bufferedPromises.length < bufferSize) {
       if (capturedErrors.length > 0 || isDone || abortReason) return;
 
-      fillOneSlot();
+      if (!fillOneSlot()) return;
     }
   };
 
+  /**
+   * @returns {boolean} whether a slot was filled — `false` when the pick fell through to an already-exhausted main iterator (nothing left to pull; the buffered slots drain on their own)
+   */
   const fillOneSlot = () => {
     /** @type {AsyncIterator<R, void, void>|undefined} */
     let currentSubIterator;
@@ -547,6 +550,14 @@ export function bufferedAsyncMap (input, callback, options) {
 
       currentSubIterator = isPartOfArray(iterator, subIterators) ? iterator : undefined;
     }
+
+    // Once the source has reported done, never pull it again — native
+    // for-await makes no post-done next() calls, and a defensive source may
+    // throw (spurious errors), hang, or in fail-fast mode have its spurious
+    // error win the race against a slow in-flight value and drop it.
+    // Sub-iterators need no such guard: a done sub leaves the rotation in
+    // its own classification arm.
+    if (!currentSubIterator && mainReturnedDone) return false;
 
     // A sync-throwing .next() must flow through the same envelope path as a
     // rejecting one — evaluate it inside try/catch and let the adjacent
@@ -709,6 +720,8 @@ export function bufferedAsyncMap (input, callback, options) {
     } else {
       bufferedPromises.push(bufferPromise);
     }
+
+    return true;
   };
 
   /**

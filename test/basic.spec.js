@@ -264,6 +264,79 @@ describe('bufferedAsyncMap() basic', () => {
     collected.toSorted().should.deep.equal(['a', 'b', 'c']);
   });
 
+  it('should not pull the source again once done has been observed', async () => {
+    // The initial fill legitimately dispatches bufferSize speculative
+    // concurrent pulls — that prefetch is the library's contract. The
+    // guarantee under test: once a done result has RESOLVED and been
+    // classified, no further source.next() call is ever made. Pre-fix
+    // every consumed value triggered a refill pull against the exhausted
+    // source (up to bufferSize extra calls).
+    let nextCalls = 0;
+    /** @type {Array<(result: IteratorResult<string>) => void>} */
+    const pending = [];
+    /** @type {AsyncIterable<string>} */
+    const source = {
+      [Symbol.asyncIterator]: () => ({
+        next: () => {
+          nextCalls += 1;
+          return new Promise(resolve => { pending.push(resolve); });
+        },
+      }),
+    };
+
+    const iterator = bufferedAsyncMap(source, async (item) => item, { bufferSize: 3 });
+
+    // The construction-time speculative fill: exactly bufferSize pulls.
+    nextCalls.should.equal(3);
+
+    pending[0]?.({ done: false, value: 'a' });
+    pending[1]?.({ done: false, value: 'b' });
+    pending[2]?.({ done: true, value: undefined });
+
+    /** @type {string[]} */
+    const collected = [];
+    let result;
+    while (!(result = await iterator.next()).done) {
+      collected.push(result.value);
+    }
+
+    collected.toSorted().should.deep.equal(['a', 'b']);
+    nextCalls.should.equal(3);
+  });
+
+  it('should not surface spurious errors from a source that is strict about post-done next()', async () => {
+    // A defensive source ("cursor already closed") throws if pulled after
+    // done. bufferSize matches the stream length so the speculative fill
+    // ends exactly on the done result; any further pull is a post-done
+    // over-pull. Pre-fix those refills turned a clean 2-value stream into
+    // spurious captured errors (and in fail-fast mode a spurious error
+    // could win the race against a slow in-flight value and drop it).
+    let sourceDone = false;
+    let nextCalls = 0;
+    /** @type {AsyncIterable<string>} */
+    const source = {
+      [Symbol.asyncIterator]: () => ({
+        next: async () => {
+          if (sourceDone) throw new Error('next() called after done');
+          nextCalls += 1;
+          if (nextCalls === 3) {
+            sourceDone = true;
+            return { done: true, value: undefined };
+          }
+          return { done: false, value: `v${nextCalls}` };
+        },
+      }),
+    };
+
+    /** @type {string[]} */
+    const collected = [];
+    for await (const value of bufferedAsyncMap(source, async (item) => item, { bufferSize: 3 })) {
+      collected.push(value);
+    }
+
+    collected.toSorted().should.deep.equal(['v1', 'v2']);
+  });
+
   it('should return an AsyncIterable when provided with required arguments', () => {
     const asyncIterable = (async function * () {})();
     const bufferedAsyncIterable = bufferedAsyncMap(
