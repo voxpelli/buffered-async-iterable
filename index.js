@@ -459,12 +459,22 @@ export function bufferedAsyncMap (input, callback, options) {
    * run cleanup (markAsEnded) before propagating the reason. Returns
    * `undefined` when no abort is pending — caller continues normally.
    *
+   * An abort that is still undelivered when an explicit closer
+   * (return/throw/dispose) has already set isDone is suppressed, not
+   * delivered: the consumer chose to close, so a later next() resolves
+   * { done: true } — matching native AsyncGenerator — instead of rejecting
+   * through a closed iterator with a stale signal.reason. A parked next()
+   * being woken BY the abort is unaffected (delivery there runs before
+   * markAsEnded flips isDone).
+   *
    * @returns {{ kind: 'throw', reason: unknown } | { kind: 'done' } | undefined}
    */
   const handleAbortIfPending = () => {
     if (abortReason && !abortReason.delivered) {
       abortReason.delivered = true;
-      return { kind: 'throw', reason: abortReason.reason };
+      return isDone
+        ? { kind: 'done' }
+        : { kind: 'throw', reason: abortReason.reason };
     }
     if (abortReason && abortReason.delivered) {
       return { kind: 'done' };

@@ -435,6 +435,47 @@ describe('bufferedAsyncMap() options.signal', () => {
     }
   });
 
+  it('suppresses an undelivered abort once the consumer explicitly closes via return()', async () => {
+    const ac = new AbortController();
+    const iterator = bufferedAsyncMap(['a', 'b', 'c'], async (item) => item, { signal: ac.signal });
+
+    await iterator.next();
+
+    // Abort fires between pulls (no next() pending), but the consumer
+    // reacts by closing the iterator instead of pulling again.
+    ac.abort(new Error('stale'));
+    await iterator.return().should.eventually.deep.equal({ done: true, value: undefined });
+
+    // Native AsyncGenerator semantics: next() after return() is done —
+    // pre-fix this rejected with the stale abort reason through a closed
+    // iterator.
+    await iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
+  });
+
+  it('suppresses an undelivered abort once the consumer explicitly closes via throw()', async () => {
+    const ac = new AbortController();
+    const consumerError = new Error('consumer-throw');
+    const iterator = bufferedAsyncMap(['a', 'b'], async (item) => item, { signal: ac.signal });
+
+    await iterator.next();
+    ac.abort(new Error('stale'));
+
+    const thrown = await iterator.throw(consumerError).catch(err => ({ rejectedWith: err }));
+    chai.expect(thrown).to.deep.equal({ rejectedWith: consumerError });
+
+    await iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
+  });
+
+  it('suppresses a pre-aborted signal once the consumer closes before pulling', async () => {
+    const ac = new AbortController();
+    ac.abort(new Error('pre-aborted'));
+
+    const iterator = bufferedAsyncMap(['a'], async (item) => item, { signal: ac.signal });
+
+    await iterator.return().should.eventually.deep.equal({ done: true, value: undefined });
+    await iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
+  });
+
   // --- external-signal listener lifecycle ---
 
   it('detaches its external-signal abort listener when the iterator closes', async () => {
