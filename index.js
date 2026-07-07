@@ -104,6 +104,14 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {AsyncIterator<R, void, void>[]} */
   const subIterators = [];
 
+  // Iterators pulled from the rotation because they produced a malformed
+  // (non-object) result. They are still nominally open — unlike a rejecting
+  // .next(), which closes the iterator per protocol — so markAsEnded must
+  // still .return() them; "stop pulling" and "skip cleanup" are separate
+  // concerns.
+  /** @type {Array<AsyncIterator<T, void, void> | AsyncIterator<R, void, void>>} */
+  const pendingCloses = [];
+
   /** @type {BufferPromise[]} */
   const bufferedPromises = [];
 
@@ -219,6 +227,9 @@ export function bufferedAsyncMap (input, callback, options) {
           // Ensure the main iterators are completed
           ...(mainReturnedDone ? [] : [asyncIterator]),
           ...subIterators,
+          // Iterators dropped from the rotation for malformed results but
+          // never closed — still owed a .return()
+          ...pendingCloses,
         ]
           .map(async item => item.return && item.return())
       );
@@ -245,6 +256,7 @@ export function bufferedAsyncMap (input, callback, options) {
 
       bufferedPromises.splice(0);
       subIterators.splice(0);
+      pendingCloses.splice(0);
 
       if (throwAnyError && capturedErrors.length > 0) {
         throw capturedErrors.length === 1
@@ -346,7 +358,10 @@ export function bufferedAsyncMap (input, callback, options) {
         }))
         .then(result => {
           if (!isObject(result)) {
+            // Malformed result: stop pulling from this iterator, but it is
+            // still nominally open — leave it to markAsEnded to .return()
             arrayDeleteInPlace(subIterators, subIterator);
+            pendingCloses.push(subIterator);
             return terminalEnvelope(bufferPromise, true, new TypeError('Expected sub-iterator next() result to be an object'));
           }
           if (ERR in result) {
@@ -375,7 +390,15 @@ export function bufferedAsyncMap (input, callback, options) {
         }))
         .then(async result => {
           if (!isObject(result)) {
+            // Malformed result: stop pulling (mainReturnedDone) but the
+            // source is still nominally open — record it for cleanup, which
+            // the mainReturnedDone exclusion in markAsEnded would skip.
+            // Deduped: a refill can pull from the source again before the
+            // first malformed slot is ever raced.
             mainReturnedDone = true;
+            if (!pendingCloses.includes(asyncIterator)) {
+              pendingCloses.push(asyncIterator);
+            }
             return terminalEnvelope(bufferPromise, false, new TypeError('Expected source iterator next() result to be an object'));
           }
           if (ERR in result) {

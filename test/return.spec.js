@@ -172,6 +172,52 @@ describe('bufferedAsyncMap() AsyncInterface return()', () => {
     healthyReturn.should.have.been.called;
   });
 
+  it('should still close a source that produced a malformed result', async () => {
+    const sourceReturn = sinon.stub().resolves({ done: true, value: undefined });
+
+    // A source whose second next() resolves to a non-object (driver bug).
+    // The malformed result surfaces as a TypeError, but the source is still
+    // nominally open — an explicit return() must .return() it (pre-fix, the
+    // malformed arm marked the source done and cleanup skipped it entirely).
+    /** @type {AsyncIterator<number>} */
+    const malformedSource = {
+      next: sinon.stub()
+        .resolves(/** @type {*} */ ('wow'))
+        .onFirstCall().resolves({ value: 1, done: false }),
+      'return': sourceReturn,
+    };
+    /** @type {AsyncIterable<number>} */
+    const malformedIterable = { [Symbol.asyncIterator]: () => malformedSource };
+
+    const iterator = bufferedAsyncMap(malformedIterable, async (item) => item, { bufferSize: 2 });
+
+    await iterator.next().should.eventually.deep.equal({ value: 1 });
+    await iterator.return().should.eventually.deep.equal({ done: true, value: undefined });
+
+    sourceReturn.should.have.been.calledOnce;
+  });
+
+  it('should still close a sub-iterator that produced a malformed result', async () => {
+    const subReturn = sinon.stub().resolves({ done: true, value: undefined });
+
+    /** @type {(item: string) => AsyncIterable<string>} */
+    const callback = () => ({
+      [Symbol.asyncIterator]: () => ({
+        next: sinon.stub()
+          .resolves(/** @type {*} */ ('wow'))
+          .onFirstCall().resolves({ value: 'sub-a', done: false }),
+        'return': subReturn,
+      }),
+    });
+
+    const iterator = bufferedAsyncMap(['x'], callback, { bufferSize: 2 });
+
+    await iterator.next().should.eventually.deep.equal({ value: 'sub-a' });
+    await iterator.return().should.eventually.deep.equal({ done: true, value: undefined });
+
+    subReturn.should.have.been.calledOnce;
+  });
+
   it('should be called when a loop breaks', async () => {
     const iterator = bufferedAsyncMap(baseAsyncIterable, async (item) => item, { bufferSize: 3 });
     const returnSpy = sinon.spy(iterator, 'return');
