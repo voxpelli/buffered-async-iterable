@@ -1307,6 +1307,29 @@ describe('bufferedAsyncMap() values', () => {
       chai.expect(await promised).to.equal(undefined);
     });
 
+    it('validates the input array and its elements at call time', async () => {
+      // Non-array input
+      chai.expect(() => {
+        // @ts-ignore
+        mergeIterables('abc');
+      }).to.throw(TypeError, 'Expected input to be an array of iterables');
+
+      // A bad element throws NOW, naming its index — pre-fix `yield * null`
+      // surfaced minutes later as a deferred fail-eventually TypeError after
+      // every healthy source drained.
+      chai.expect(() => {
+        // eslint-disable-next-line unicorn/no-null -- a null element is exactly the malformed input under test
+        mergeIterables([(async function * () { yield 1; })(), /** @type {*} */ (null)]);
+      }).to.throw(TypeError, 'Expected input[1] to be an (async) iterable or array');
+
+      // Strings are iterable but char-splitting a merge element is almost
+      // always a mistake — rejected with a pointer to the fix.
+      chai.expect(() => {
+        // @ts-ignore
+        mergeIterables(['abc']);
+      }).to.throw(TypeError, /Expected input\[0\].*strings are not merged char-by-char/);
+    });
+
     it('forwards ordered: true to drain inputs in source order', async () => {
       // Asymmetric timing: the second source is ten times faster than the first.
       // Under the default ordered:false this would interleave (second-* would

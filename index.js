@@ -29,8 +29,13 @@ async function * yieldIterable (item) {
  * generators don't carry one) and the proper return type. Thin wrapper —
  * see `bufferedAsyncMap` for the full semantics of each option.
  *
- * Note: construction is now eager — input validation throws at call time
- * rather than at first `.next()`.
+ * Note: construction is eager — the input array AND its elements are
+ * validated at call time, not at first `.next()`. A bad element would
+ * otherwise surface minutes later as a deferred fail-eventually TypeError
+ * (possibly wrapped in an AggregateError) after every healthy source
+ * drained. Strings are deliberately rejected even though they're iterable:
+ * merging 'abc' as the chars 'a','b','c' is almost always a caller mistake
+ * — spread the string explicitly if chars are wanted.
  *
  * @template T
  * @param {Array<AsyncIterable<T> | Iterable<T> | T[]>} input
@@ -38,6 +43,16 @@ async function * yieldIterable (item) {
  * @returns {BufferedAsyncIterableIterator<T>}
  */
 export function mergeIterables (input, options) {
+  if (!Array.isArray(input)) throw new TypeError('Expected input to be an array of iterables');
+
+  for (const [i, item] of input.entries()) {
+    // Strings fail these guards too (they're iterable but not objects) —
+    // intentional, see the docblock.
+    if (!isAsyncIterable(item) && !isIterable(item) && !Array.isArray(item)) {
+      throw new TypeError(`Expected input[${i}] to be an (async) iterable or array${typeof item === 'string' ? ' — strings are not merged char-by-char, spread the string first if that is intended' : ''}`);
+    }
+  }
+
   return bufferedAsyncMap(input, yieldIterable, options);
 }
 
