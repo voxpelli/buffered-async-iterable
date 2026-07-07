@@ -13,6 +13,45 @@ import {
 // to carry their own `err` property into error envelopes, dropping values.
 const ERR = Symbol('bufferedAsyncMap error');
 
+// Hoisted rejection-normalizers for safeStep — module-level so the hot pull
+// path allocates zero catch closures per slot (they close over nothing but
+// module scope).
+
+/**
+ * @param {unknown} err
+ * @returns {{ [ERR]: Error }}
+ */
+const catchSubStepErr = (err) => ({ [ERR]: normalizeError(err, 'Unknown subiterator error') });
+
+/**
+ * @param {unknown} err
+ * @returns {{ [ERR]: Error }}
+ */
+const catchMainStepErr = (err) => ({ [ERR]: normalizeError(err, 'Unknown iterator error') });
+
+/**
+ * One pull step that can never reject: a synchronously-throwing `.next()`
+ * becomes a rejection, and the rejection-normalizer is attached in the same
+ * synchronous frame — so there is no window in which a rejected step could
+ * surface as an unhandledRejection, and every failure flows through the
+ * ERR-tagged catch-envelope.
+ *
+ * @template V
+ * @param {AsyncIterator<V, void, void>} iterator
+ * @param {(err: unknown) => { [ERR]: Error }} onNextError
+ * @returns {Promise<IteratorResult<V, void> | { [ERR]: Error }>}
+ */
+const safeStep = (iterator, onNextError) => {
+  /** @type {Promise<IteratorResult<V, void>>} */
+  let step;
+  try {
+    step = iterator.next();
+  } catch (err) {
+    step = Promise.reject(err);
+  }
+  return Promise.resolve(step).catch(onNextError);
+};
+
 /**
  * @template T
  * @param {AsyncIterable<T> | Iterable<T> | T[]} item
@@ -90,6 +129,10 @@ export function mergeIterables (input, options) {
  */
 export function bufferedAsyncMap (input, callback, options) {
   /** @typedef {Promise<{ bufferPromise: BufferPromise, isSubIterator: boolean, value: R | AsyncIterable<R> | undefined, fromSubIterator?: boolean, done?: boolean, err?: Error | undefined }>} BufferPromise */
+  // NOTE: fromSubIterator/done/err exist only on TERMINAL envelopes (the lean
+  // value shape never carries them — see the factories); the two factories'
+  // second positional booleans mean DIFFERENT things (isSubIterator vs
+  // fromSubIterator), hence the inline arg comments at every call site.
   const {
     bufferSize = 6,
     cleanupTimeout,
@@ -134,6 +177,20 @@ export function bufferedAsyncMap (input, callback, options) {
   // concerns.
   /** @type {Array<AsyncIterator<T, void, void> | AsyncIterator<R, void, void>>} */
   const pendingCloses = [];
+
+  /**
+   * Queues an iterator for cleanup-time .return(). Deduped: a refill can
+   * pull from the same iterator again before its first malformed slot is
+   * ever raced, and one .return() per iterator is all the protocol allows
+   * for. Gated on isDone: once cleanup has started (or run), pendingCloses
+   * has already been handed to doCleanup — a late push would either be
+   * missed by the in-flight allSettled or leak past the splice.
+   *
+   * @param {AsyncIterator<T, void, void> | AsyncIterator<R, void, void>} it
+   */
+  const recordPendingClose = (it) => {
+    if (!isDone && !pendingCloses.includes(it)) pendingCloses.push(it);
+  };
 
   /** @type {BufferPromise[]} */
   const bufferedPromises = [];
@@ -419,70 +476,92 @@ export function bufferedAsyncMap (input, callback, options) {
     if (currentSubIterator) {
       const subIterator = currentSubIterator;
 
-      /** @type {Promise<IteratorResult<R, void>>} */
-      let step;
-      try {
-        step = subIterator.next();
-      } catch (err) {
-        step = Promise.reject(err);
-      }
-
-      bufferPromise = Promise.resolve(step)
-        .catch((/** @type {unknown} */ err) => ({
-          [ERR]: normalizeError(err, 'Unknown subiterator error'),
-        }))
+      bufferPromise = safeStep(subIterator, catchSubStepErr)
         .then(result => {
-          if (!isObject(result)) {
-            // Malformed result: stop pulling from this iterator, but it is
-            // still nominally open — leave it to markAsEnded to .return()
-            arrayDeleteInPlace(subIterators, subIterator);
-            pendingCloses.push(subIterator);
-            return terminalEnvelope(bufferPromise, true, new TypeError('Expected sub-iterator next() result to be an object'));
-          }
-          if (ERR in result) {
-            arrayDeleteInPlace(subIterators, subIterator);
-            return terminalEnvelope(bufferPromise, true, result[ERR]);
-          }
-          if (result.done) {
-            arrayDeleteInPlace(subIterators, subIterator);
-            return terminalEnvelope(bufferPromise, true);
+          // Classification: 0 = value, 1 = malformed/unreadable (iterator
+          // still nominally open — owed a cleanup-time .return()), 2 =
+          // rejected next() (closed per protocol), 3 = done.
+          let kind = 0;
+          /** @type {Error | undefined} */
+          let stepErr;
+          /** @type {R | undefined} */
+          let stepValue;
+
+          // The try contains ONLY the foreign-object reads: `in` and the
+          // done/value property loads can hit Proxy traps or throwing
+          // getters, and a throw here would otherwise reject bufferPromise —
+          // breaking the "envelopes never reject" invariant. All bookkeeping
+          // stays outside so a throw cannot leave it half-applied.
+          try {
+            if (!isObject(result)) {
+              kind = 1;
+              stepErr = new TypeError('Expected sub-iterator next() result to be an object');
+            } else if (ERR in result) {
+              kind = 2;
+              stepErr = result[ERR];
+            } else if (result.done) {
+              kind = 3;
+            } else {
+              stepValue = result.value;
+            }
+          } catch (err) {
+            kind = 1;
+            stepErr = normalizeError(err, 'Failed to read sub-iterator next() result');
           }
 
-          return valueEnvelope(bufferPromise, false, result.value);
+          if (kind === 0) return valueEnvelope(bufferPromise, /* isSubIterator */ false, /** @type {R} */ (stepValue));
+
+          // Malformed result (kind 1): stop pulling from this iterator, but
+          // it is still nominally open — leave it to markAsEnded to
+          // .return(). A rejecting next() (kind 2) closed it per protocol,
+          // so no pending close there.
+          arrayDeleteInPlace(subIterators, subIterator);
+          if (kind === 1) recordPendingClose(subIterator);
+          return terminalEnvelope(bufferPromise, /* fromSubIterator */ true, stepErr);
         });
     } else {
-      /** @type {Promise<IteratorResult<T, void>>} */
-      let step;
-      try {
-        step = asyncIterator.next();
-      } catch (err) {
-        step = Promise.reject(err);
-      }
-
-      bufferPromise = Promise.resolve(step)
-        .catch((/** @type {unknown} */ err) => ({
-          [ERR]: normalizeError(err, 'Unknown iterator error'),
-        }))
+      bufferPromise = safeStep(asyncIterator, catchMainStepErr)
         .then(async result => {
-          if (!isObject(result)) {
-            // Malformed result: stop pulling (mainReturnedDone) but the
-            // source is still nominally open — record it for cleanup, which
-            // the mainReturnedDone exclusion in markAsEnded would skip.
-            // Deduped: a refill can pull from the source again before the
-            // first malformed slot is ever raced.
-            mainReturnedDone = true;
-            if (!pendingCloses.includes(asyncIterator)) {
-              pendingCloses.push(asyncIterator);
+          // Classification: 0 = value, 1 = malformed/unreadable (source
+          // still nominally open — owed a cleanup-time .return()), 2 =
+          // rejected next() (closed per protocol), 3 = done.
+          let kind = 0;
+          /** @type {Error | undefined} */
+          let stepErr;
+          /** @type {T | undefined} */
+          let stepValue;
+
+          // The try contains ONLY the foreign-object reads: `in` and the
+          // done/value property loads can hit Proxy traps or throwing
+          // getters, and a throw here would otherwise reject bufferPromise —
+          // breaking the "envelopes never reject" invariant. All bookkeeping
+          // stays outside so a throw cannot leave it half-applied.
+          try {
+            if (!isObject(result)) {
+              kind = 1;
+              stepErr = new TypeError('Expected source iterator next() result to be an object');
+            } else if (ERR in result) {
+              kind = 2;
+              stepErr = result[ERR];
+            } else if (result.done) {
+              kind = 3;
+            } else {
+              stepValue = result.value;
             }
-            return terminalEnvelope(bufferPromise, false, new TypeError('Expected source iterator next() result to be an object'));
+          } catch (err) {
+            kind = 1;
+            stepErr = normalizeError(err, 'Failed to read source iterator next() result');
           }
-          if (ERR in result) {
+
+          if (kind !== 0) {
+            // Stop pulling (mainReturnedDone) in every terminal case. Only
+            // the malformed/unreadable source (kind 1) is still nominally
+            // open — record it for cleanup, which the mainReturnedDone
+            // exclusion in markAsEnded would otherwise skip; a rejecting
+            // next() (kind 2) closed it per protocol.
             mainReturnedDone = true;
-            return terminalEnvelope(bufferPromise, false, result[ERR]);
-          }
-          if (result.done) {
-            mainReturnedDone = true;
-            return terminalEnvelope(bufferPromise, false);
+            if (kind === 1) recordPendingClose(asyncIterator);
+            return terminalEnvelope(bufferPromise, /* fromSubIterator */ false, stepErr);
           }
 
           // The dispatch sits inside the try so a synchronously-throwing
@@ -491,13 +570,13 @@ export function bufferedAsyncMap (input, callback, options) {
           // bypassing the errors mode entirely.
           try {
             // eslint-disable-next-line promise/no-callback-in-promise
-            const callbackResult = callback(result.value, { signal: internalAbortController.signal });
+            const callbackResult = callback(/** @type {T} */ (stepValue), { signal: internalAbortController.signal });
             const isSubIterator = isAsyncIterable(callbackResult);
             const value = await callbackResult;
 
-            return valueEnvelope(bufferPromise, isSubIterator, value);
+            return valueEnvelope(bufferPromise, /* isSubIterator */ isSubIterator, value);
           } catch (err) {
-            return terminalEnvelope(bufferPromise, false, normalizeError(err, 'Unknown callback error'));
+            return terminalEnvelope(bufferPromise, /* fromSubIterator */ false, normalizeError(err, 'Unknown callback error'));
           }
         });
     }
@@ -696,18 +775,35 @@ export function bufferedAsyncMap (input, callback, options) {
       }
 
       return drainOrContinue(fromSubIterator);
-    } else if (isSubIterator && isAsyncIterable(value)) {
-      /** @type {AsyncIterator<R, void, void>} */
+    } else if (isSubIterator) {
+      /** @type {AsyncIterator<R, void, void> | undefined} */
       let subIterator;
 
       try {
-        subIterator = /** @type {AsyncIterable<R, void, void>} */ (value)[Symbol.asyncIterator]();
+        // Re-checked here (not just at dispatch time): `await callbackResult`
+        // can resolve to something other than the iterable that was
+        // dispatched (a thenable-hybrid), and the check itself is a foreign
+        // read — a Proxy `has` trap or a Symbol.asyncIterator getter/body
+        // can throw, which must surface as a stream error rather than a raw
+        // nextValue rejection.
+        if (isAsyncIterable(value)) {
+          subIterator = /** @type {AsyncIterable<R, void, void>} */ (value)[Symbol.asyncIterator]();
+        }
       } catch (subIterableErr) {
         // The callback returned a malformed async iterable — the
-        // Symbol.asyncIterator property exists but invoking it threw.
-        // Surface it like any other stream error.
+        // Symbol.asyncIterator property exists but invoking it threw (or the
+        // protocol re-check itself threw). Surface it like any other stream
+        // error.
         await handleStreamError(normalizeError(subIterableErr, 'Unknown sub-iterator error'));
         return drainOrContinue(fromSubIterator);
+      }
+
+      if (!subIterator) {
+        // Thenable-hybrid: the value the await settled to no longer
+        // implements the async-iterable protocol — yield it as a plain value.
+        fillQueue();
+
+        return /** @type {IteratorYieldResult<R>} */ ({ value });
       }
 
       subIterators.unshift(subIterator);

@@ -55,6 +55,55 @@ export function unwrapCapturedError (err) {
 }
 
 /**
+ * Drives `iterator.next()` n times, collecting each outcome as a
+ * `{ rejected, value }` record — the shared harness for exactly-once
+ * delivery assertions. Framework-agnostic on purpose (plain async, no
+ * runner coupling).
+ *
+ * @param {AsyncIterator<*>} iterator
+ * @param {number} n
+ * @returns {Promise<Array<{ rejected: boolean, value: unknown }>>}
+ */
+export async function collectNextOutcomes (iterator, n) {
+  /** @type {Array<{ rejected: boolean, value: unknown }>} */
+  const outcomes = [];
+  for (let i = 0; i < n; i++) {
+    try {
+      outcomes.push({ rejected: false, value: await iterator.next() });
+    } catch (err) {
+      outcomes.push({ rejected: true, value: err });
+    }
+  }
+  return outcomes;
+}
+
+/**
+ * The executable form of the "reject exactly once with the given error,
+ * then done forever" contract: asserts exactly one rejection, its identity,
+ * and that every later outcome is `{ done: true, value: undefined }`.
+ *
+ * @param {Array<{ rejected: boolean, value: unknown }>} outcomes
+ * @param {unknown} expectedErr
+ * @returns {void}
+ */
+export function expectSingleRejectionThenDone (outcomes, expectedErr) {
+  const rejections = outcomes.filter(o => o.rejected);
+  if (rejections.length !== 1) {
+    throw new Error(`Expected exactly one rejection, saw ${rejections.length}`);
+  }
+  if (rejections[0]?.value !== expectedErr) {
+    throw new Error(`Rejection identity mismatch: got ${String(rejections[0]?.value)}`);
+  }
+  const firstReject = outcomes.findIndex(o => o.rejected);
+  for (const o of outcomes.slice(firstReject + 1)) {
+    const r = /** @type {{ done?: boolean, value?: unknown }} */ (o.value);
+    if (o.rejected || r?.done !== true || r?.value !== undefined) {
+      throw new Error(`Expected { done: true, value: undefined } after the rejection, saw ${JSON.stringify(o)}`);
+    }
+  }
+}
+
+/**
  * @param {unknown} item
  * @returns {boolean}
  */
