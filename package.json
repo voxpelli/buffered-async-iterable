@@ -31,7 +31,8 @@
     "lib/**/*.js",
     "index.js",
     "index.d.ts",
-    "index.d.ts.map"
+    "index.d.ts.map",
+    "ADVANCED.md"
   ],
   "scripts": {
     "bench": "node --expose-gc --allow-natives-syntax benchmark/index.js",
