@@ -341,8 +341,8 @@ export function bufferedAsyncMap (input, callback, options) {
   // whichever park is currently waiting (read at fire time via the mutable
   // `currentPark`); internalAbortController aborts at most once, so one
   // listener suffices. If the signal is already aborted (pre-aborted external
-  // signal) the listener never fires — fine, because handleAbortIfPending()
-  // short-circuits nextValue() via `abortReason` before it reaches the race.
+  // signal) the listener never fires — fine, because nextValue()'s pre-race
+  // `abortReason` check routes to deliverAbort() before it reaches the race.
   /** @type {{ resolve: (value: typeof ABORT_SENTINEL) => void } | undefined} */
   let currentPark;
 
@@ -668,12 +668,17 @@ export function bufferedAsyncMap (input, callback, options) {
   };
 
   /**
-   * Drives the "reject the next .next() once with abortReason.reason, then
-   * done:true forever" contract.
+   * The one abort-delivery sequence, shared by nextValue's pre-race and
+   * post-race sites. Drives the "reject the next .next() once with
+   * abortReason.reason, then done:true forever" contract: claim the pending
+   * abort, run (or await the in-flight) cleanup, then throw the reason or
+   * resolve done. Also handles the no-abort wake (a park resolved by a
+   * plain close): plain cleanup-then-done.
    *
-   * Returns a descriptor rather than throwing directly so the caller can
-   * run cleanup (markAsEnded) before propagating the reason. Returns
-   * `undefined` when no abort is pending — caller continues normally.
+   * The claim (`delivered = true` plus the isDone read) is synchronous —
+   * no await before it — so concurrent pulls can't both win, and it runs
+   * BEFORE the `await markAsEnded()` so cleanup completes before the
+   * reason propagates.
    *
    * An abort that is still undelivered when an explicit closer
    * (return/throw/dispose) has already set isDone is suppressed, not
@@ -683,35 +688,19 @@ export function bufferedAsyncMap (input, callback, options) {
    * being woken BY the abort is unaffected (delivery there runs before
    * markAsEnded flips isDone).
    *
-   * @returns {{ kind: 'throw', reason: unknown } | { kind: 'done' } | undefined}
-   */
-  const handleAbortIfPending = () => {
-    if (abortReason && !abortReason.delivered) {
-      abortReason.delivered = true;
-      return isDone
-        ? { kind: 'done' }
-        : { kind: 'throw', reason: abortReason.reason };
-    }
-    if (abortReason && abortReason.delivered) {
-      return { kind: 'done' };
-    }
-    // Implicit `undefined` return = "no abort pending, caller continues normally".
-    // Lint rejects an explicit `return undefined` / `return` here.
-  };
-
-  /**
-   * The one abort-delivery sequence, shared by nextValue's pre-race and
-   * post-race sites: consume the pending descriptor, run (or await the
-   * in-flight) cleanup, then throw the reason or resolve done. Also handles
-   * the no-descriptor wake (a park resolved by a plain close): plain
-   * cleanup-then-done.
-   *
    * @returns {Promise<IteratorResult<R, undefined>>}
    */
   const deliverAbort = async () => {
-    const handled = handleAbortIfPending();
+    const claimed = (abortReason && !abortReason.delivered && !isDone)
+      ? abortReason
+      : undefined;
+
+    if (abortReason) abortReason.delivered = true;
+
     await markAsEnded();
-    if (handled?.kind === 'throw') throw handled.reason;
+
+    if (claimed) throw claimed.reason;
+
     return { done: true, value: undefined };
   };
 
