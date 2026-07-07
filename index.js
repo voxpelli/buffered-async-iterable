@@ -197,72 +197,98 @@ export function bufferedAsyncMap (input, callback, options) {
   );
 
   /**
-   * Single cleanup path. Idempotent via `isDone`. Called from `return()`,
-   * `throw()`, `Symbol.asyncDispose`, source exhaustion, and abort delivery.
-   * Always fires `internalAbortController.abort()` — this is what wakes a parked
-   * nextValue() and signals in-flight callbacks via the per-task signal.
+   * The cleanup body: runs exactly once, launched by the first closer. It
+   * cannot reject (allSettled + splices), so awaiting it is always safe.
+   * Fires `internalAbortController.abort()` synchronously — this is what
+   * wakes a parked nextValue() and signals in-flight callbacks via the
+   * per-task signal.
    *
-   * The cleanup body runs once; the resolved result still reflects *this*
-   * call's `value` (so `return(v)` is spec-correct even after the iterator
-   * has already closed).
+   * @returns {Promise<void>}
+   */
+  const doCleanup = async () => {
+    if (!internalAbortController.signal.aborted) {
+      internalAbortController.abort();
+    }
+
+    // Source .return() rejections are intentionally swallowed: allSettled
+    // keeps cleanup going even if one source's return() rejects, so a broken
+    // cleanup can't mask the consumer-facing error or leave buffers uncleared.
+    // Wrap as async so a sync-throwing .return getter or body becomes a
+    // promise rejection that allSettled can swallow.
+    const cleanup = Promise.allSettled(
+      [
+        // Ensure the main iterators are completed
+        ...(mainReturnedDone ? [] : [asyncIterator]),
+        ...subIterators,
+        // Iterators dropped from the rotation for malformed results but
+        // never closed — still owed a .return()
+        ...pendingCloses,
+      ]
+        .map(async item => item.return && item.return())
+    );
+
+    // If the caller opted into a cleanup deadline, race it. A source stuck
+    // in a hung await would otherwise queue .return() behind the hung
+    // .next() and never settle — hanging the consumer-facing close /
+    // abort forever. The timer is cleared once the race settles so a prompt
+    // cleanup doesn't leave a pending setTimeout keeping the event loop
+    // alive for the rest of the (possibly long) cleanupTimeout window.
+    if (cleanupTimeout === undefined) {
+      await cleanup;
+    } else {
+      /** @type {(value: void) => void} */
+      let fireTimeout;
+      const timeout = new Promise(resolve => { fireTimeout = resolve; });
+      const timer = setTimeout(() => fireTimeout(), cleanupTimeout);
+      try {
+        await Promise.race([cleanup, timeout]);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    bufferedPromises.splice(0);
+    subIterators.splice(0);
+    pendingCloses.splice(0);
+  };
+
+  /** @type {Promise<void> | undefined} */
+  let cleanupPromise;
+
+  /**
+   * Single cleanup path. Called from `return()`, `throw()`,
+   * `Symbol.asyncDispose`, source exhaustion, and abort delivery.
+   *
+   * Await-idempotent, matching native AsyncGenerator's request queue: the
+   * first closer launches doCleanup() and EVERY closer — including later
+   * ones that find isDone already set — awaits the same cleanupPromise
+   * before resolving. A second closer must not resolve `{ done: true }`
+   * while the source's `finally` is still running (the cross-task
+   * return()-while-parked case), or `await using` scopes would exit before
+   * cleanup settled.
+   *
+   * The captured fail-eventually errors throw only for the FIRST closer
+   * that asked for them (`throwAnyError`) — a later markAsEnded(true) after
+   * the drain-throw (or after a swallowing return()) stays `{ done: true }`,
+   * preserving "reject exactly once, then done forever".
    *
    * @param {boolean} [throwAnyError]
    * @returns {Promise<IteratorReturnResult<undefined>>}
    */
   const markAsEnded = async (throwAnyError) => {
-    if (!isDone) {
+    const firstCloser = !isDone;
+
+    if (firstCloser) {
       isDone = true;
+      cleanupPromise = doCleanup();
+    }
 
-      if (!internalAbortController.signal.aborted) {
-        internalAbortController.abort();
-      }
+    await cleanupPromise;
 
-      // Source .return() rejections are intentionally swallowed: allSettled
-      // keeps cleanup going even if one source's return() rejects, so a broken
-      // cleanup can't mask the consumer-facing error or leave buffers uncleared.
-      // Wrap as async so a sync-throwing .return getter or body becomes a
-      // promise rejection that allSettled can swallow.
-      const cleanup = Promise.allSettled(
-        [
-          // Ensure the main iterators are completed
-          ...(mainReturnedDone ? [] : [asyncIterator]),
-          ...subIterators,
-          // Iterators dropped from the rotation for malformed results but
-          // never closed — still owed a .return()
-          ...pendingCloses,
-        ]
-          .map(async item => item.return && item.return())
-      );
-
-      // If the caller opted into a cleanup deadline, race it. A source stuck
-      // in a hung await would otherwise queue .return() behind the hung
-      // .next() and never settle — hanging the consumer-facing close /
-      // abort forever. The timer is cleared once the race settles so a prompt
-      // cleanup doesn't leave a pending setTimeout keeping the event loop
-      // alive for the rest of the (possibly long) cleanupTimeout window.
-      if (cleanupTimeout === undefined) {
-        await cleanup;
-      } else {
-        /** @type {(value: void) => void} */
-        let fireTimeout;
-        const timeout = new Promise(resolve => { fireTimeout = resolve; });
-        const timer = setTimeout(() => fireTimeout(), cleanupTimeout);
-        try {
-          await Promise.race([cleanup, timeout]);
-        } finally {
-          clearTimeout(timer);
-        }
-      }
-
-      bufferedPromises.splice(0);
-      subIterators.splice(0);
-      pendingCloses.splice(0);
-
-      if (throwAnyError && capturedErrors.length > 0) {
-        throw capturedErrors.length === 1
-          ? capturedErrors[0]
-          : new AggregateError(capturedErrors, 'Multiple errors in bufferedAsyncMap');
-      }
+    if (firstCloser && throwAnyError && capturedErrors.length > 0) {
+      throw capturedErrors.length === 1
+        ? capturedErrors[0]
+        : new AggregateError(capturedErrors, 'Multiple errors in bufferedAsyncMap');
     }
 
     return { done: true, value: undefined };

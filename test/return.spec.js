@@ -10,6 +10,7 @@ import {
   bufferedAsyncMap,
 } from '../index.js';
 import {
+  promisableTimeout,
   yieldValuesOverTime,
 } from './utils.js';
 
@@ -216,6 +217,49 @@ describe('bufferedAsyncMap() AsyncInterface return()', () => {
     await iterator.return().should.eventually.deep.equal({ done: true, value: undefined });
 
     subReturn.should.have.been.calledOnce;
+  });
+
+  it('resolves a parked next() only after the closing cleanup has settled', async () => {
+    let finallySettled = false;
+
+    /** @returns {AsyncIterable<number>} */
+    async function * source () {
+      try {
+        yield 0;
+        await promisableTimeout(10_000);
+        yield 1;
+      } finally {
+        await promisableTimeout(50);
+        finallySettled = true;
+      }
+    }
+
+    const iterator = bufferedAsyncMap(source(), async (item) => item, { bufferSize: 1 });
+
+    const flow = (async () => {
+      await iterator.next();
+
+      // Consumer parks on the slow source; a separate task closes the
+      // iterator. Native AsyncGenerator queues the requests, so the parked
+      // pull must not resolve { done: true } while the source's finally is
+      // still running — pre-fix the woken pull hit markAsEnded as a second
+      // closer and resolved immediately, letting the consumer's scope exit
+      // ~10s before cleanup settled.
+      const parked = iterator.next();
+      const closer = iterator.return();
+
+      const result = await parked;
+      const settledAtParkResolve = finallySettled;
+
+      await closer;
+      return { result, settledAtParkResolve };
+    })();
+
+    await clock.runAllAsync();
+    const { result, settledAtParkResolve } = await flow;
+
+    result.should.deep.equal({ done: true, value: undefined });
+    settledAtParkResolve.should.equal(true);
   });
 
   it('should be called when a loop breaks', async () => {

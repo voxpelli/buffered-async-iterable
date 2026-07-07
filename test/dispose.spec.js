@@ -7,6 +7,7 @@ import {
   bufferedAsyncMap,
 } from '../index.js';
 import {
+  promisableTimeout,
   yieldValuesOverTime,
 } from './utils.js';
 
@@ -109,5 +110,42 @@ describe('bufferedAsyncMap() Symbol.asyncDispose', () => {
     await flow;
 
     returnSpy.should.have.been.calledOnce;
+  });
+
+  it('dispose waits for a cleanup started by an earlier un-awaited return()', async () => {
+    let finallySettled = false;
+
+    /** @returns {AsyncIterable<number>} */
+    async function * source () {
+      try {
+        yield 0;
+        yield 1;
+      } finally {
+        await promisableTimeout(50);
+        finallySettled = true;
+      }
+    }
+
+    const iterator = bufferedAsyncMap(source(), async (item) => item, { bufferSize: 1 });
+
+    const flow = (async () => {
+      await iterator.next();
+
+      // Fire-and-forget return() starts the cleanup; the microtask hop lets
+      // it reach markAsEnded before dispose runs. Pre-fix, dispose hit the
+      // isDone short-circuit and resolved while the source's finally was
+      // still pending its 50ms — an `await using` scope would exit early.
+      const firstCloser = iterator.return();
+      await Promise.resolve();
+
+      await iterator[Symbol.asyncDispose]();
+      const settledAtDisposeResolve = finallySettled;
+
+      await firstCloser;
+      return settledAtDisposeResolve;
+    })();
+
+    await clock.runAllAsync();
+    (await flow).should.equal(true);
   });
 });
