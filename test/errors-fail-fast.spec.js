@@ -184,6 +184,88 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
     }
   });
 
+  it('drops a fail-fast error that lost the shutdown race to a synchronous abort (abort wins, once)', async () => {
+    // The only reachable route to "fail-fast error with abortReason already
+    // set": synchronous user re-entry — a callback result whose
+    // [Symbol.asyncIterator]() body aborts the external signal and then
+    // throws, between nextValue's post-race abort re-check and
+    // handleStreamError. Exactly one rejection (the abort reason); the
+    // re-entry error is deliberately dropped, mirroring Promise.all.
+    const reason = new Error('sync-re-entry abort');
+    const ac = new AbortController();
+
+    /** @type {(item: string) => *} */
+    const callback = () => ({
+      [Symbol.asyncIterator] () {
+        ac.abort(reason);
+        throw new Error('re-entry boom');
+      },
+    });
+
+    const iterator = bufferedAsyncMap(['a'], callback, { errors: 'fail-fast', signal: ac.signal, bufferSize: 1 });
+
+    /** @type {Array<{ rejected: boolean, value?: unknown }>} */
+    const results = [];
+    const flow = (async () => {
+      for (let i = 0; i < 3; i += 1) {
+        try {
+          const r = await iterator.next();
+          results.push({ rejected: false, value: r });
+        } catch (err) {
+          results.push({ rejected: true, value: err });
+        }
+      }
+    })();
+
+    await clock.runAllAsync();
+    await flow;
+
+    const rejections = results.filter(r => r.rejected);
+    rejections.should.have.length(1);
+    chai.expect(rejections[0]?.value).to.equal(reason);
+    for (const r of results.slice(results.findIndex(x => x.rejected) + 1)) {
+      chai.expect(r).to.deep.equal({ rejected: false, value: { done: true, value: undefined } });
+    }
+  });
+
+  it('discards the second of two racing errors (Promise.all parity)', async () => {
+    const errA = new Error('first');
+    const errB = new Error('second');
+    const callback = sinon.stub()
+      .returnsArg(0)
+      .onCall(0).rejects(errA)
+      .onCall(1).rejects(errB);
+
+    const iterator = bufferedAsyncMap(
+      fromArray([0, 1, 2]),
+      callback,
+      { errors: 'fail-fast', bufferSize: 3 }
+    );
+
+    /** @type {Array<{ rejected: boolean, value?: unknown }>} */
+    const results = [];
+    const flow = (async () => {
+      for (let i = 0; i < 4; i += 1) {
+        try {
+          const r = await iterator.next();
+          results.push({ rejected: false, value: r });
+        } catch (err) {
+          results.push({ rejected: true, value: err });
+        }
+      }
+    })();
+
+    await clock.runAllAsync();
+    await flow;
+
+    // Exactly one rejection carrying the FIRST error; the second vanishes at
+    // the envelope level (its slot is spliced by cleanup) — no
+    // AggregateError, no second rejection.
+    const rejections = results.filter(r => r.rejected);
+    rejections.should.have.length(1);
+    chai.expect(rejections[0]?.value).to.equal(errA);
+  });
+
   it('source error fails fast', async () => {
     const sourceError = new Error('src-error');
 

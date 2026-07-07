@@ -758,8 +758,19 @@ export function bufferedAsyncMap (input, callback, options) {
       throw normalizedErr;
     }
 
-    // fail-eventually: capture and fall through — the caller keeps draining.
-    capturedErrors.push(normalizedErr);
+    if (errorsMode === 'fail-eventually') {
+      // Capture and fall through — the caller keeps draining.
+      capturedErrors.push(normalizedErr);
+    }
+    // fail-fast with abortReason already set: the abort (or an earlier
+    // fail-fast error) won and owns the single rejection — this error is
+    // deliberately dropped, mirroring Promise.all. Ordinary abort timing
+    // can't reach here (both call sites are synchronously downstream of the
+    // post-race abort re-check); the only route is synchronous user
+    // re-entry, e.g. a callback result whose [Symbol.asyncIterator]() body
+    // aborts the external signal and then throws. Pushing it instead would
+    // be dead storage: nothing can drain-throw capturedErrors in fail-fast
+    // mode, and a future drain path would turn it into a second rejection.
   };
 
   // Consumer: races buffered promises against a fresh per-pull park promise.
