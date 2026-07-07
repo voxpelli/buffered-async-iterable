@@ -154,7 +154,10 @@ export function mergeIterables (input, options) {
  * present (even when no `options.signal` is passed) and aborts on iterator
  * close — `return()`, `throw()`, `Symbol.asyncDispose`, source exhaustion,
  * external abort, or first error in `errors: 'fail-fast'` mode — so callbacks
- * can fast-path on shutdown.
+ * can fast-path on shutdown. On natural source exhaustion the abort fires
+ * during end-of-stream cleanup, after in-flight work has drained — callbacks
+ * will NOT observe `aborted === true` mid-flight in that case (pinned by
+ * test/per-task-signal.spec.js).
  *
  * A callback result with a **callable** `Symbol.asyncIterator` member fans
  * out as a nested iterable (GetMethod semantics: one read of the member,

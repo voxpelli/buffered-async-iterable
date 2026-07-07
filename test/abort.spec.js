@@ -75,7 +75,7 @@ describe('bufferedAsyncMap() options.signal', () => {
     }, TypeError, 'Expected signal to be an AbortSignal');
   });
 
-  it('omitting signal behaves identically to commit 3 (no regression)', async () => {
+  it('omitting signal keeps plain iteration unchanged (no abort-wiring behavior leaks in)', async () => {
     /** @type {number[]} */
     const result = [];
     const iterator = bufferedAsyncMap(yieldValuesOverTime(3, 100), async (item) => item);

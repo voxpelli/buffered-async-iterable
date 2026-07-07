@@ -124,7 +124,7 @@ Semantics worth knowing:
 
 #### Options
 
-* `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultaneous items processed at once in the buffer. Any positive integer is accepted, but very large buffers pay an O(bufferSize) cost per unordered pull (the internal race spans the whole buffer) — sizes in the hundreds of thousands work, they just don't scale linearly.
+* `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultaneous items processed at once in the buffer. Any positive integer is accepted, but very large buffers pay an O(bufferSize) cost per unordered pull (the internal race spans the whole buffer) — sizes in the tens of thousands work (the regression spec pins 20 000), they just don't scale linearly.
 * `cleanupTimeout` – _optional_ – a number of milliseconds to wait for the source iterator's `.return()` before giving up. Defaults to no timeout (await forever) — match `AsyncGenerator`. Useful when the source might hang and you don't want abort/return/dispose to wait for it. See [Cancellation](#cancellation).
 * `ordered` – _optional_ – defaults to `false`, when `true` the result will be returned in order instead of unordered.
 * `signal` – _optional_ – an `AbortSignal`. When aborted, iteration stops pulling from the source, the next pending or freshly-called `iterator.next()` rejects with `signal.reason` exactly once — unless the consumer has already closed the iterator via `return()`/`throw()`/`Symbol.asyncDispose`, in which case the abort is suppressed and `next()` resolves `{ done: true }`, matching native `AsyncGenerator`. All subsequent calls return `{ done: true, value: undefined }`. See [Cancellation](#cancellation).
@@ -134,7 +134,7 @@ The returned iterator also implements `Symbol.asyncDispose`, so it can be used w
 
 ### mergeIterables()
 
-Merges all given (async) iterables in parallel, returning the values as they resolve. Thin wrapper over [`bufferedAsyncMap`](#bufferedasyncmap) — see that section for the full semantics of each option. Returns the same iterator shape (including `Symbol.asyncDispose`); validation is eager and covers the elements: a non-iterable element throws at call time with its index (`Expected input[1] to be …`), and string elements are rejected outright — merging `'abc'` as the characters `'a'`, `'b'`, `'c'` is almost always a mistake; spread the string first if that is genuinely intended.
+Merges all given (async) iterables in parallel, returning the values as they resolve. Thin wrapper over [`bufferedAsyncMap`](#bufferedasyncmap) — see that section for the full semantics of each option. Returns the same iterator shape (including `Symbol.asyncDispose`); validation is eager and covers the elements: a non-iterable element throws at call time with its index (`Expected input[1] to have a callable Symbol.asyncIterator or Symbol.iterator`), and string elements are rejected outright — merging `'abc'` as the characters `'a'`, `'b'`, `'c'` is almost always a mistake; spread the string first if that is genuinely intended.
 
 #### Syntax
 
