@@ -37,7 +37,7 @@ describe('bufferedAsyncMap() basic', () => {
     }, TypeError, 'Expected callback to be a function');
   });
 
-  it('should throw when provided cleanupTimeout is not a positive finite number', () => {
+  it('should throw when provided cleanupTimeout is not a positive number within the timer range', () => {
     const asyncIterable = (async function * () {})();
     const invalid = [
       true,
@@ -46,6 +46,10 @@ describe('bufferedAsyncMap() basic', () => {
       Number.NaN,
       Number.POSITIVE_INFINITY,
       'fast',
+      // Above Node's TIMEOUT_MAX, setTimeout silently clamps to 1ms —
+      // turning a ~25-day grace period into abandon-after-1ms.
+      2 ** 31,
+      Number.MAX_SAFE_INTEGER,
     ];
 
     for (const cleanupTimeout of invalid) {
@@ -56,8 +60,17 @@ describe('bufferedAsyncMap() basic', () => {
           // @ts-ignore
           { cleanupTimeout }
         );
-      }, TypeError, 'Expected cleanupTimeout to be a positive finite number of milliseconds', `cleanupTimeout=${String(cleanupTimeout)} should be rejected`);
+      }, TypeError, 'Expected cleanupTimeout to be a positive number of milliseconds no larger than 2147483647 (2^31-1)', `cleanupTimeout=${String(cleanupTimeout)} should be rejected`);
     }
+
+    // The exact maximum is accepted.
+    should.not.Throw(() => {
+      bufferedAsyncMap(
+        (async function * () {})(),
+        async () => {},
+        { cleanupTimeout: 2147483647 }
+      );
+    });
   });
 
   it('should throw when provided bufferSize is not a positive integer', () => {

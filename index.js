@@ -92,8 +92,11 @@ export function bufferedAsyncMap (input, callback, options) {
   if (!isAsyncIterable(asyncIterable)) throw new TypeError('Expected asyncIterable to have a Symbol.asyncIterator function');
   if (typeof callback !== 'function') throw new TypeError('Expected callback to be a function');
   if (!Number.isInteger(bufferSize) || bufferSize < 1) throw new TypeError('Expected bufferSize to be a positive integer');
-  if (cleanupTimeout !== undefined && (typeof cleanupTimeout !== 'number' || !Number.isFinite(cleanupTimeout) || cleanupTimeout <= 0)) {
-    throw new TypeError('Expected cleanupTimeout to be a positive finite number of milliseconds');
+  // 2147483647 = Node's TIMEOUT_MAX (2^31-1): setTimeout silently clamps
+  // anything above it to 1ms, which would invert the caller's intent — a
+  // "wait ~25 days" grace period becoming "abandon cleanup after 1ms".
+  if (cleanupTimeout !== undefined && (typeof cleanupTimeout !== 'number' || !Number.isFinite(cleanupTimeout) || cleanupTimeout <= 0 || cleanupTimeout > 2147483647)) {
+    throw new TypeError('Expected cleanupTimeout to be a positive number of milliseconds no larger than 2147483647 (2^31-1)');
   }
   if (externalSignal !== undefined && !(externalSignal instanceof AbortSignal)) throw new TypeError('Expected signal to be an AbortSignal');
   if (errorsMode !== 'fail-eventually' && errorsMode !== 'fail-fast') throw new TypeError("Expected errors to be 'fail-eventually' or 'fail-fast'");
