@@ -1,6 +1,6 @@
 # Advanced semantics
 
-The precise contracts behind the summaries in the [README](../README.md).
+The precise contracts behind the summaries in the [README](README.md).
 Everything on this page is pinned by the test suite — section notes point at
 the relevant spec files where it helps.
 
