@@ -315,7 +315,11 @@ export function bufferedAsyncMap (input, callback, options) {
       // signal fires or is GC'd. On external abort the listener runs first,
       // then the internal abort it triggers retires it — same net effect.
       safeSignal.addEventListener('abort', () => {
-        // If the iterator already closed via return()/throw()/dispose, abort is too late: no-op.
+        // Belt-and-braces: the `signal:` option below already detaches this
+        // listener when the internal controller aborts (which every close
+        // path does, synchronously with setting isDone), so this guard is
+        // believed unreachable — kept as a cheap invariant assertion should
+        // the detach mechanism ever change.
         if (isDone) return;
         requestConsumerAbort(safeSignal.reason);
       }, { once: true, signal: internalAbortController.signal });
@@ -359,6 +363,11 @@ export function bufferedAsyncMap (input, callback, options) {
    */
   const doCleanup = async () => {
     if (!internalAbortController.signal.aborted) {
+      // Deliberately WITHOUT abortReason and without a reason arg: a plain
+      // close has no consumer-facing reason to deliver. requestConsumerAbort
+      // is the single writer for the reason-paired abort; this bare abort is
+      // its one intentional exception (the pairing invariant is
+      // one-directional: abortReason ⇒ aborted, never the converse).
       internalAbortController.abort();
     }
 
@@ -450,7 +459,7 @@ export function bufferedAsyncMap (input, callback, options) {
   // single construction site so its V8 hidden class is structural, not
   // comment-enforced. The value shape is deliberately lean — the consumer's
   // hot path only reads isSubIterator/value, so it stays the 3-field object
-  // it always was (bufferSize-scaling benches regress ~10-15% if the hot
+  // it always was (bufferSize-scaling benches regress by double digits (~12-17%) if the hot
   // literal grows to carry the terminal-only fields). The terminal shape
   // carries the drain bookkeeping (fromSubIterator/done/err). Two stable
   // maps keep nextValue's property loads cheaply polymorphic. Envelopes
@@ -716,10 +725,12 @@ export function bufferedAsyncMap (input, callback, options) {
    * The abortReason check matters on the drain branch: an external abort
    * can land in the microtask window of the `await handleStreamError(...)`
    * preceding this call, after the top-of-nextValue abort check already
-   * ran. markAsEnded(true) would then throw the captured errors AND leave
-   * the abort undelivered — two consecutive rejections, breaking both
-   * "external abort wins over queued errors" and "reject exactly once".
-   * Re-entering nextValue routes delivery through its top block instead.
+   * ran. markAsEnded(true) would then throw the captured errors even
+   * though the abort won the commit race — the delivered rejection's
+   * IDENTITY would be wrong (the closed-iterator suppression keeps the
+   * count at one either way; pinned by the signal-reason sweep in
+   * test/abort.spec.js). Re-entering nextValue routes delivery through
+   * its top block instead.
    *
    * @param {boolean | undefined} fromSubIterator
    * @returns {Promise<IteratorResult<R>>}
@@ -784,6 +795,8 @@ export function bufferedAsyncMap (input, callback, options) {
 
     const nextBufferedPromise = bufferedPromises[0];
 
+    // `true` = drain: surface any captured fail-eventually errors (throws
+    // only for the first closer; later calls resolve done).
     if (!nextBufferedPromise) return markAsEnded(true);
     // Routed through markAsEnded (not a bare { done: true }) so a pull that
     // observes a concurrent closer's isDone still awaits that closer's

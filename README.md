@@ -124,10 +124,10 @@ Semantics worth knowing:
 
 #### Options
 
-* `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultaneous items processed at once in the buffer.
+* `bufferSize` – _optional_ – defaults to `6`, sets the max amount of simultaneous items processed at once in the buffer. Any positive integer is accepted, but very large buffers pay an O(bufferSize) cost per unordered pull (the internal race spans the whole buffer) — sizes in the hundreds of thousands work, they just don't scale linearly.
 * `cleanupTimeout` – _optional_ – a number of milliseconds to wait for the source iterator's `.return()` before giving up. Defaults to no timeout (await forever) — match `AsyncGenerator`. Useful when the source might hang and you don't want abort/return/dispose to wait for it. See [Cancellation](#cancellation).
 * `ordered` – _optional_ – defaults to `false`, when `true` the result will be returned in order instead of unordered.
-* `signal` – _optional_ – an `AbortSignal`. When aborted, iteration stops pulling from the source, the next pending or freshly-called `iterator.next()` rejects with `signal.reason` exactly once, and all subsequent calls return `{ done: true, value: undefined }`. See [Cancellation](#cancellation).
+* `signal` – _optional_ – an `AbortSignal`. When aborted, iteration stops pulling from the source, the next pending or freshly-called `iterator.next()` rejects with `signal.reason` exactly once — unless the consumer has already closed the iterator via `return()`/`throw()`/`Symbol.asyncDispose`, in which case the abort is suppressed and `next()` resolves `{ done: true }`, matching native `AsyncGenerator`. All subsequent calls return `{ done: true, value: undefined }`. See [Cancellation](#cancellation).
 * `errors` – _optional_ – defaults to `'fail-eventually'`. Controls how errors from the callback or the source surface to the consumer. See [Errors](#errors).
 
 The returned iterator also implements `Symbol.asyncDispose`, so it can be used with `await using` for deterministic cleanup. See [Resource management](#resource-management).
@@ -184,7 +184,7 @@ bufferedAsyncMap(source, async (item, { signal }) => {
 
 The per-callback `signal` is always present (even when no `options.signal` is passed) and aborts on iterator close (return / throw / dispose / source-exhaustion-with-cleanup), so callbacks can fast-path on shutdown. Callbacks observe `signal.aborted === true` within one microtask of iterator close — they continue running (Promises are not cancellable) until they reach the next `await` of something signal-aware (`fetch`, `undici`, etc.) or until they voluntarily exit via a check on `signal.aborted`.
 
-If `options.signal` is already aborted at construction time, the source is never read and the first `iterator.next()` rejects with `signal.reason`. External abort always wins over queued errors.
+If `options.signal` is already aborted at construction time, the source is never read and the first `iterator.next()` rejects with `signal.reason` (unless the consumer closes the iterator before ever pulling — an undelivered abort is suppressed by an explicit close). External abort takes precedence over queued / not-yet-captured errors; see [Errors](#errors) for the one committed-fail-fast exception.
 
 Abort delivery waits for the source to finish closing: the rejecting `iterator.next()` only settles after the source's `.return()` (its `finally` blocks) has run — the same guarantee `for await`/`await using` give you on normal completion. If the source might hang inside `.return()` (for example a native async generator whose `finally` block awaits an unsettled promise), set `cleanupTimeout` to put an upper bound on how long that wait can take. The pending source promises are abandoned (not cancellable) but the consumer unblocks:
 

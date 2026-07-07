@@ -95,6 +95,8 @@ describe('bufferedAsyncMap() per-task AbortSignal', () => {
     );
 
     await iterator.next();
+    chai.expect(capturedSignal).to.exist;
+    chai.expect(capturedSignal?.aborted).to.equal(false);
 
     const flow = (async () => {
       try {
