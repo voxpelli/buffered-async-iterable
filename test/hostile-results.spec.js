@@ -45,6 +45,12 @@ function sourceWithHostileResult (hostileAt, makeHostile, hooks = {}) {
   };
 }
 
+/** @type {(item: string) => *} */
+const truthyNonObjectIteratorCallback = () => ({ [Symbol.asyncIterator]: () => 42 });
+
+/** A data object that merely carries a non-callable Symbol.asyncIterator member. */
+const nonCallableMemberShape = () => ({ [Symbol.asyncIterator]: undefined, tag: 'data' });
+
 describe('bufferedAsyncMap() hostile iterator results', () => {
   // Envelope pipeline contract: no foreign-object read may reject a buffer
   // slot. Native for-await parity: IteratorComplete/IteratorValue are
@@ -285,8 +291,11 @@ describe('bufferedAsyncMap() hostile iterator results', () => {
     collected.should.deep.equal(['FROM-THEN']);
   });
 
-  it('routes a hybrid resolving to a throwing-has Proxy through the errors mode', async () => {
-    const recheckErr = new Error('recheck-has boom');
+  it('yields a hybrid resolving to a throwing-has Proxy (GetMethod: only [[Get]] is consulted)', async () => {
+    // The dispatch does a single [[Get]] of the member — a has-trap is
+    // never invoked (GetMethod parity). This proxy's untrapped get forwards
+    // to the empty target: nullish member, so the resolution is plain data.
+    const hostileProxy = new Proxy({}, { has () { throw new Error('has must not be consulted'); } });
     /** @type {(item: string) => *} */
     const callback = () => ({
       async * [Symbol.asyncIterator] () {
@@ -294,7 +303,29 @@ describe('bufferedAsyncMap() hostile iterator results', () => {
       },
       /** @param {(v: unknown) => void} resolve */
       then (resolve) {
-        resolve(new Proxy({}, { has () { throw recheckErr; } }));
+        resolve(hostileProxy);
+      },
+    });
+
+    /** @type {unknown[]} */
+    const collected = [];
+    for await (const value of bufferedAsyncMap(['a'], callback)) {
+      collected.push(value);
+    }
+
+    collected.should.deep.equal([hostileProxy]);
+  });
+
+  it('routes a hybrid resolving to a Proxy whose member read throws through the errors mode', async () => {
+    const recheckErr = new Error('recheck-get boom');
+    /** @type {(item: string) => *} */
+    const callback = () => ({
+      async * [Symbol.asyncIterator] () {
+        yield 'never-seen';
+      },
+      /** @param {(v: unknown) => void} resolve */
+      then (resolve) {
+        resolve(new Proxy({}, { get () { throw recheckErr; } }));
       },
     });
 
@@ -311,9 +342,13 @@ describe('bufferedAsyncMap() hostile iterator results', () => {
     chai.expect(unwrapCapturedError(outcome.rejectedWith)).to.equal(recheckErr);
   });
 
-  it('yields a callback result whose [Symbol.asyncIterator]() returns null instead of livelocking', async () => {
-    // Pre-fix a falsy iterator entered subIterators and the refill loop
-    // starved the event loop permanently (process needed SIGKILL).
+  it('surfaces a branded TypeError when [Symbol.asyncIterator]() returns null, without livelocking', async () => {
+    // The original defect: a falsy iterator entered subIterators and the
+    // refill loop starved the event loop permanently (process needed
+    // SIGKILL). GetMethod parity: a CALLABLE member whose invocation
+    // returns a non-object is the same protocol violation it is for
+    // for-await — a branded TypeError through the errors mode, never a
+    // livelock and never silently treated as data.
     const hybrid = {
       // eslint-disable-next-line unicorn/no-null -- the falsy-iterator return is exactly the hostile shape under test
       [Symbol.asyncIterator]: () => null,
@@ -321,13 +356,44 @@ describe('bufferedAsyncMap() hostile iterator results', () => {
     /** @type {(item: string) => *} */
     const callback = () => hybrid;
 
-    /** @type {unknown[]} */
-    const collected = [];
-    for await (const value of bufferedAsyncMap(['a'], callback)) {
-      collected.push(value);
-    }
+    const outcomes = await collectNextOutcomes(bufferedAsyncMap(['a'], callback), 3);
 
-    collected.should.deep.equal([hybrid]);
+    const rejections = outcomes.filter(o => o.rejected);
+    rejections.should.have.length(1);
+    const err = unwrapCapturedError(rejections[0]?.value);
+    err.should.be.instanceOf(TypeError);
+    err.message.should.equal('Expected the callback result Symbol.asyncIterator method to return an object');
+  });
+
+  it('surfaces the same branded TypeError for a truthy non-object iterator', async () => {
+    // Pre-fix the truthy sibling (`() => 42`) took a different path: 42
+    // entered subIterators and the failure surfaced later as an unbranded
+    // 'Unknown subiterator error' wrapping "iterator.next is not a
+    // function". Falsy and truthy non-objects now fail identically.
+    const outcomes = await collectNextOutcomes(bufferedAsyncMap(['a'], truthyNonObjectIteratorCallback), 3);
+
+    const rejections = outcomes.filter(o => o.rejected);
+    rejections.should.have.length(1);
+    const err = unwrapCapturedError(rejections[0]?.value);
+    err.should.be.instanceOf(TypeError);
+    err.message.should.equal('Expected the callback result Symbol.asyncIterator method to return an object');
+  });
+
+  it('yields a result with a non-callable Symbol.asyncIterator member, from sync and async callbacks alike', async () => {
+    // GetMethod: a nullish/non-callable member means "not async iterable" —
+    // the result is plain data. Pre-fix the sync-callback path (dispatch
+    // sees the raw object) threw an unbranded TypeError while the
+    // async-callback path (dispatch sees the promise) yielded the object.
+    for (const callback of [() => nonCallableMemberShape(), async () => nonCallableMemberShape()]) {
+      /** @type {*[]} */
+      const collected = [];
+      for await (const value of bufferedAsyncMap(['a'], /** @type {*} */ (callback))) {
+        collected.push(value);
+      }
+
+      collected.should.have.length(1);
+      collected[0].should.have.property('tag', 'data');
+    }
   });
 
   it('closes a sub-iterator exactly once when several in-flight pulls all resolve malformed', async () => {

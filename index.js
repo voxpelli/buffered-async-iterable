@@ -156,6 +156,11 @@ export function mergeIterables (input, options) {
  * external abort, or first error in `errors: 'fail-fast'` mode — so callbacks
  * can fast-path on shutdown.
  *
+ * A callback result with a **callable** `Symbol.asyncIterator` member fans
+ * out as a nested iterable (GetMethod semantics: one read of the member,
+ * nullish or non-callable means the result is a plain value); the method
+ * returning a non-object is a stream error, matching `for await`.
+ *
  * @template T
  * @template R
  * @param {AsyncIterable<T> | (Iterable<T> & object) | T[]} input
@@ -876,27 +881,37 @@ export function bufferedAsyncMap (input, callback, options) {
       let subIterator;
 
       try {
-        // Re-checked here (not just at dispatch time): `await callbackResult`
-        // can resolve to something other than the iterable that was
-        // dispatched (a thenable-hybrid), and the check itself is a foreign
-        // read — a Proxy `has` trap or a Symbol.asyncIterator getter/body
-        // can throw, which must surface as a stream error rather than a raw
-        // nextValue rejection.
-        if (isAsyncIterable(value)) {
-          subIterator = /** @type {AsyncIterable<R, void, void>} */ (value)[Symbol.asyncIterator]();
+        // GetMethod-aligned single [[Get]] (no `in` probe — a has-trap is
+        // never consulted, matching for-await). Re-read here rather than
+        // trusting dispatch time: `await callbackResult` can resolve to
+        // something other than the iterable that was dispatched (a
+        // thenable-hybrid). A callable member fans out; a nullish or
+        // non-callable member means the resolved value is plain data. The
+        // read and the call are foreign operations — a throw surfaces as a
+        // stream error, and a callable member returning a non-object is the
+        // same protocol violation it is for for-await.
+        const method = isSpecObject(value)
+          ? /** @type {{ [Symbol.asyncIterator]?: unknown }} */ (value)[Symbol.asyncIterator]
+          : undefined;
+        if (typeof method === 'function') {
+          const candidate = method.call(value);
+          if (!isSpecObject(candidate)) {
+            throw new TypeError('Expected the callback result Symbol.asyncIterator method to return an object');
+          }
+          subIterator = /** @type {AsyncIterator<R, void, void>} */ (candidate);
         }
       } catch (subIterableErr) {
-        // The callback returned a malformed async iterable — the
-        // Symbol.asyncIterator property exists but invoking it threw (or the
-        // protocol re-check itself threw). Surface it like any other stream
-        // error.
+        // The callback returned a malformed async iterable — the member
+        // read threw, invoking it threw, or it returned a non-object.
+        // Surface it like any other stream error.
         await handleStreamError(normalizeError(subIterableErr, 'Unknown sub-iterator error'));
         return drainOrContinue(fromSubIterator);
       }
 
       if (!subIterator) {
-        // Thenable-hybrid: the value the await settled to no longer
-        // implements the async-iterable protocol — yield it as a plain value.
+        // No callable member: the value the await settled to is plain data
+        // (a thenable-hybrid resolution, or a data object that merely
+        // carries a non-callable Symbol.asyncIterator property).
         fillQueue();
 
         return /** @type {IteratorYieldResult<R>} */ ({ value });
