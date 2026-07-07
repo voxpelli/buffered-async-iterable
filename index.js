@@ -571,6 +571,34 @@ export function bufferedAsyncMap (input, callback, options) {
   };
 
   /**
+   * Terminal-slot follow-up shared by the error and malformed-sub-iterable
+   * paths: refill if a sub-iterator is in play, then close on drain or
+   * recurse for the next value. Hoisted out of nextValue — the happy path
+   * never calls it, so it shouldn't cost a per-pull closure allocation;
+   * `fromSubIterator` is the only per-pull input, passed as a parameter.
+   *
+   * The abortReason check matters on the drain branch: an external abort
+   * can land in the microtask window of the `await handleStreamError(...)`
+   * preceding this call, after the top-of-nextValue abort check already
+   * ran. markAsEnded(true) would then throw the captured errors AND leave
+   * the abort undelivered — two consecutive rejections, breaking both
+   * "external abort wins over queued errors" and "reject exactly once".
+   * Re-entering nextValue routes delivery through its top block instead.
+   *
+   * @param {boolean | undefined} fromSubIterator
+   * @returns {Promise<IteratorResult<R>>}
+   */
+  const drainOrContinue = (fromSubIterator) => {
+    if (fromSubIterator || subIterators.length > 0) {
+      fillQueue();
+    }
+
+    return (bufferedPromises.length === 0 && !abortReason)
+      ? markAsEnded(true)
+      : nextValue();
+  };
+
+  /**
    * Routes a stream error — from the source, the callback, or a malformed
    * sub-iterable — through the configured error mode. In `fail-fast` mode
    * the first error short-circuits iteration via the abort machinery and
@@ -657,28 +685,6 @@ export function bufferedAsyncMap (input, callback, options) {
       value,
     } = resolvedPromise;
 
-    // Refill if a sub-iterator is in play, then either close on drain or
-    // recurse for the next value. Shared by the error and the
-    // malformed-sub-iterable paths.
-    //
-    // The abortReason check matters on the drain branch: an external abort
-    // can land in the microtask window of the `await handleStreamError(...)`
-    // preceding this call, after the top-of-nextValue abort check already
-    // ran. markAsEnded(true) would then throw the captured errors AND leave
-    // the abort undelivered — two consecutive rejections, breaking both
-    // "external abort wins over queued errors" and "reject exactly once".
-    // Re-entering nextValue routes delivery through its top block instead.
-    /** @returns {Promise<IteratorResult<R>>} */
-    const drainOrContinue = () => {
-      if (fromSubIterator || subIterators.length > 0) {
-        fillQueue();
-      }
-
-      return (bufferedPromises.length === 0 && !abortReason)
-        ? markAsEnded(true)
-        : nextValue();
-    };
-
     // We are mandated by the spec to always do this return if the iterator is
     // done — via markAsEnded so the concurrent closer's cleanup is awaited too
     if (isDone) {
@@ -689,7 +695,7 @@ export function bufferedAsyncMap (input, callback, options) {
         await handleStreamError(normalizeError(err, 'Unknown error'));
       }
 
-      return drainOrContinue();
+      return drainOrContinue(fromSubIterator);
     } else if (isSubIterator && isAsyncIterable(value)) {
       /** @type {AsyncIterator<R, void, void>} */
       let subIterator;
@@ -701,7 +707,7 @@ export function bufferedAsyncMap (input, callback, options) {
         // Symbol.asyncIterator property exists but invoking it threw.
         // Surface it like any other stream error.
         await handleStreamError(normalizeError(subIterableErr, 'Unknown sub-iterator error'));
-        return drainOrContinue();
+        return drainOrContinue(fromSubIterator);
       }
 
       subIterators.unshift(subIterator);
