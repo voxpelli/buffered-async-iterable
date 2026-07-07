@@ -3,7 +3,7 @@
 import { findLeastTargeted } from './lib/find-least-targeted.js';
 import { arrayDeleteInPlace, makeIterableAsync, normalizeError } from './lib/misc.js';
 import {
-  isAsyncIterable, isObject, isPartOfArray,
+  isAsyncIterable, isPartOfArray, isSpecObject,
 } from './lib/type-checks.js';
 
 // Tags the internal catch-envelope produced when a source / sub-iterator
@@ -534,9 +534,9 @@ export function bufferedAsyncMap (input, callback, options) {
     // .catch (attached synchronously, so there is no unhandledRejection
     // window) normalize both into the ERR-tagged catch-envelope.
     //
-    // Discrimination order in the .then matters: isObject first (`in` throws
-    // on primitives, and a malformed next() can resolve to one), then the
-    // ERR tag, then done.
+    // Discrimination order in the .then matters: isSpecObject first (`in`
+    // throws on primitives, and a malformed next() can resolve to one), then
+    // the brand-verified ERR tag, then done.
     /** @type {BufferPromise} */
     let bufferPromise;
 
@@ -559,17 +559,29 @@ export function bufferedAsyncMap (input, callback, options) {
           // getters, and a throw here would otherwise reject bufferPromise —
           // breaking the "envelopes never reject" invariant. All bookkeeping
           // stays outside so a throw cannot leave it half-applied.
+          // KEEP IN SYNC with the twin classification in the main arm below.
           try {
-            if (!isObject(result)) {
+            if (!isSpecObject(result)) {
               kind = 1;
               stepErr = new TypeError('Expected sub-iterator next() result to be an object');
-            } else if (ERR in result) {
-              kind = 2;
-              stepErr = result[ERR];
-            } else if (result.done) {
-              kind = 3;
             } else {
-              stepValue = result.value;
+              // Read-once + brand-verify: a Proxy has-trap can lie about the
+              // private ERR symbol, so kind 2 additionally requires the
+              // same-realm Error every catch handler attaches (normalizeError
+              // guarantees it). A spoofed tag falls through to the done/value
+              // reads — exactly what native for-await does with that proxy.
+              const maybeErr = ERR in result ? result[ERR] : undefined;
+              if (maybeErr instanceof Error) {
+                kind = 2;
+                stepErr = maybeErr;
+              } else {
+                const step = /** @type {IteratorResult<R, void>} */ (result);
+                if (step.done) {
+                  kind = 3;
+                } else {
+                  stepValue = step.value;
+                }
+              }
             }
           } catch (err) {
             kind = 1;
@@ -603,17 +615,29 @@ export function bufferedAsyncMap (input, callback, options) {
           // getters, and a throw here would otherwise reject bufferPromise —
           // breaking the "envelopes never reject" invariant. All bookkeeping
           // stays outside so a throw cannot leave it half-applied.
+          // KEEP IN SYNC with the twin classification in the sub arm above.
           try {
-            if (!isObject(result)) {
+            if (!isSpecObject(result)) {
               kind = 1;
               stepErr = new TypeError('Expected source iterator next() result to be an object');
-            } else if (ERR in result) {
-              kind = 2;
-              stepErr = result[ERR];
-            } else if (result.done) {
-              kind = 3;
             } else {
-              stepValue = result.value;
+              // Read-once + brand-verify: a Proxy has-trap can lie about the
+              // private ERR symbol, so kind 2 additionally requires the
+              // same-realm Error every catch handler attaches (normalizeError
+              // guarantees it). A spoofed tag falls through to the done/value
+              // reads — exactly what native for-await does with that proxy.
+              const maybeErr = ERR in result ? result[ERR] : undefined;
+              if (maybeErr instanceof Error) {
+                kind = 2;
+                stepErr = maybeErr;
+              } else {
+                const step = /** @type {IteratorResult<T, void>} */ (result);
+                if (step.done) {
+                  kind = 3;
+                } else {
+                  stepValue = step.value;
+                }
+              }
             }
           } catch (err) {
             kind = 1;

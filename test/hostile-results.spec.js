@@ -160,6 +160,80 @@ describe('bufferedAsyncMap() hostile iterator results', () => {
     chai.expect(unwrapCapturedError(outcome.rejectedWith)).to.equal(trapErr);
   });
 
+  it('is not fooled by a Proxy has-trap that lies about the internal error tag (main arm)', async () => {
+    // A has-trap answering `true` for every key spoofs the private ERR
+    // symbol check. Pre-fix that classified the result as an internal
+    // error envelope with an `undefined` error: iteration ended silently
+    // mid-stream and the still-open source was never .return()ed. The
+    // brand-verify makes it fall through to the done/value reads — native
+    // for-await parity: falsy `done`, yield the (undefined) `value`.
+    const sourceReturn = sinon.stub().resolves({ done: true, value: undefined });
+
+    const iterator = bufferedAsyncMap(
+      sourceWithHostileResult(1, () => new Proxy({}, { has: () => true }), { 'return': sourceReturn }),
+      async (item) => item,
+      { bufferSize: 1 }
+    );
+
+    /** @type {unknown[]} */
+    const seen = [];
+    for await (const value of iterator) {
+      seen.push(value);
+      if (seen.length === 2) break;
+    }
+
+    seen.should.deep.equal(['item0', undefined]);
+    sourceReturn.should.have.been.calledOnce;
+  });
+
+  it('is not fooled by a Proxy has-trap that lies about the internal error tag (sub-iterator arm)', async () => {
+    let n = 0;
+    /** @type {(item: string) => AsyncIterable<string>} */
+    const callback = () => ({
+      [Symbol.asyncIterator]: () => ({
+        next: async () => {
+          n += 1;
+          if (n === 1) return { done: false, value: 'sub-1' };
+          if (n === 2) return /** @type {*} */ (new Proxy({}, { has: () => true }));
+          return { done: true, value: undefined };
+        },
+      }),
+    });
+
+    /** @type {unknown[]} */
+    const seen = [];
+    for await (const value of bufferedAsyncMap(['a'], callback, { bufferSize: 1 })) {
+      seen.push(value);
+    }
+
+    // Pre-fix the lying proxy silently terminated the sub-iterator after
+    // 'sub-1'; the spoof-proof classification yields the proxied
+    // (undefined) value and keeps pulling to the real done.
+    seen.should.deep.equal(['sub-1', undefined]);
+  });
+
+  it('accepts a callable IteratorResult, matching for-await (spec Object includes functions)', async () => {
+    // ECMA-262 only requires Type(result) is Object — function objects
+    // qualify. Pre-fix `isObject` rejected them as malformed while native
+    // for-await yields their value.
+    const fnResult = /** @type {*} */ (Object.assign(() => {}, { done: false, value: 'callable-x' }));
+    let n = 0;
+    /** @type {AsyncIterable<string>} */
+    const source = {
+      [Symbol.asyncIterator]: () => ({
+        next: async () => (++n === 1 ? fnResult : { done: true, value: undefined }),
+      }),
+    };
+
+    /** @type {unknown[]} */
+    const seen = [];
+    for await (const value of bufferedAsyncMap(source, async (item) => item, { bufferSize: 1 })) {
+      seen.push(value);
+    }
+
+    seen.should.deep.equal(['callable-x']);
+  });
+
   it('attributes a throwing value-getter to the source read, not the callback, and still closes the source', async () => {
     const sourceReturn = sinon.stub().resolves({ done: true, value: undefined });
     const callback = sinon.stub().resolvesArg(0);

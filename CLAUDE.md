@@ -29,7 +29,7 @@ The library is one core function (`bufferedAsyncMap`) plus a thin wrapper (`merg
 
 The function returns a stateful `AsyncIterableIterator` with these closure variables forming the state machine:
 
-- **`bufferedPromises[]`** — in-flight promises (size capped at `bufferSize`). Every slot resolves to one of exactly two envelope shapes (a lean 3-field value envelope on the hot path, one shared terminal envelope for done/error/malformed — two stable hidden classes) and **can never reject**: the pipeline catches rejections, sync throws (from the callback or a `.next()` body) and malformed results alike. Internal catch-envelopes are tagged with a module-local `ERR` symbol so foreign IteratorResults carrying their own `err` property can't be mistaken for them.
+- **`bufferedPromises[]`** — in-flight promises (size capped at `bufferSize`). Every slot resolves to one of exactly two envelope shapes (a lean 3-field value envelope on the hot path, one shared terminal envelope for done/error/malformed — two stable hidden classes) and **can never reject**: the pipeline catches rejections, sync throws (from the callback or a `.next()` body) and malformed results alike. Internal catch-envelopes are tagged with a module-local `ERR` symbol so foreign IteratorResults carrying their own `err` property can't be mistaken for them — and the tag is brand-verified (`result[ERR] instanceof Error`, guaranteed by `normalizeError`) so a Proxy `has`-trap lying about the symbol can't spoof a terminal envelope either.
 - **`subIterators[]`** — stack of nested iterators spawned when `callback` returns an `AsyncIterable<R>` (async-generator callbacks).
 - **`promisesToSourceIteratorMap`** — WeakMap tracking which iterator produced each buffer slot; consulted by `findLeastTargeted` (`lib/find-least-targeted.js`) for load-balancing.
 - **`internalAbortController`** — an `AbortController` minted per call. Its signal is **always** the second arg to `callback`, regardless of whether the consumer passed `options.signal`. It fires from `markAsEnded()` on iterator close, from `options.signal` aborting (linked via `addEventListener('abort', …)`), and from the first error in `errors: 'fail-fast'` mode. This is what lets in-flight callbacks fast-path on shutdown.
@@ -56,7 +56,7 @@ The function returns a stateful `AsyncIterableIterator` with these closure varia
 
 - `lib/find-least-targeted.js` — load-balancing: given a list of iterators and the current buffer, picks the iterator with fewest in-flight slots.
 - `lib/misc.js` — `makeIterableAsync(input)` (sync iterable → async iterable), `arrayDeleteInPlace(list, value)` (in-place splice by value), and `normalizeError(err, defaultMessage)` (coerce non-`Error` rejections at every catch site — reuse this rather than open-coding `err instanceof Error ? err : new Error(...)`).
-- `lib/type-checks.js` — `isObject` (truthy and `typeof === 'object'`; closes the `typeof null === 'object'` hole), plus `isAsyncIterable`, `isPartOfArray` guards built on it.
+- `lib/type-checks.js` — `isSpecObject` (ECMA "Type(x) is Object" — callables included; for IteratorResult/GetIteratorFromMethod positions), `isAsyncIterable`, `isPartOfArray`, plus the internal (unexported) `isObject` they build on (truthy and `typeof === 'object'`; closes the `typeof null === 'object'` hole).
 
 ### Public-API contracts worth preserving
 
