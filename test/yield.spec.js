@@ -4,34 +4,15 @@ import chaiQuantifiers from 'chai-quantifiers';
 import sinon from 'sinon';
 import sinonChai from 'sinon-chai';
 
+import {
+  stubAsyncIterator,
+} from './utils.js';
+
 chai.use(chaiAsPromised);
 chai.use(chaiQuantifiers);
 chai.use(sinonChai);
 
 const should = chai.should();
-
-function stubAsyncIterator () {
-  const next = sinon.stub();
-  const returnStub = sinon.stub();
-  const throwStub = sinon.stub();
-
-  /** @satisfies {AsyncIterator<*>} */
-  const asyncIterator = {
-    next,
-    'return': returnStub,
-    'throw': throwStub,
-  };
-
-  /** @type {AsyncIterable<*>} */
-  const asyncIterable = {
-    [Symbol.asyncIterator]: () => asyncIterator,
-  };
-
-  return {
-    asyncIterable,
-    asyncIterator,
-  };
-}
 
 describe('The built in "yield *" functionality', () => {
   afterEach(() => {

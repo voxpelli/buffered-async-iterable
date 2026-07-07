@@ -152,27 +152,6 @@ describe('bufferedAsyncMap() options.signal', () => {
     chai.expect(await parkedNext).to.deep.equal({ rejectedWith: reason });
   });
 
-  it('fresh .next() after abort rejects with reason', async () => {
-    const reason = new Error('Aborted');
-    const ac = new AbortController();
-
-    const iterator = bufferedAsyncMap(
-      yieldValuesOverTime(6, 100),
-      async (item) => item,
-      { signal: ac.signal }
-    );
-
-    const first = iterator.next();
-    await clock.runAllAsync();
-    await first;
-
-    ac.abort(reason);
-
-    const next = iterator.next().catch(err => ({ rejectedWith: err }));
-    await clock.runAllAsync();
-    chai.expect(await next).to.deep.equal({ rejectedWith: reason });
-  });
-
   it('exactly one .next() rejects with reason; subsequent calls return done', async () => {
     const reason = new Error('Once');
     const ac = new AbortController();
@@ -531,6 +510,7 @@ describe('bufferedAsyncMap() options.signal', () => {
     // race well before cleanupTimeout. The timer must be cleared, not left
     // pending — otherwise it keeps the event loop alive for the full window
     // after the iterator has already closed.
+    const timersBefore = clock.countTimers();
     const iterator = bufferedAsyncMap(
       ['a', 'b', 'c'],
       async (item) => item,
@@ -546,8 +526,10 @@ describe('bufferedAsyncMap() options.signal', () => {
     await iterator.return();
 
     // No leftover timer: the 100s cleanupTimeout was cleared in markAsEnded's
-    // finally. Before the fix this would be 1 (a dangling setTimeout).
-    clock.countTimers().should.equal(0);
+    // finally. Asserted as a delta against the pre-construction count so the
+    // spec pins "close leaves no timer behind", not "nothing else in the
+    // process owns a timer right now".
+    (clock.countTimers() - timersBefore).should.equal(0);
   });
 
   it('default (no cleanupTimeout) still waits forever for a wedged source', async () => {

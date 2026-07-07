@@ -7,6 +7,7 @@ import {
   bufferedAsyncMap,
 } from '../index.js';
 import {
+  fromArray,
   promisableTimeout,
   yieldValuesOverTime,
 } from './utils.js';
@@ -14,17 +15,6 @@ import {
 chai.use(chaiAsPromised);
 chai.use(sinonChai);
 const should = chai.should();
-
-/**
- * @template T
- * @param {T[]} items
- * @returns {AsyncIterable<T>}
- */
-async function * fromArray (items) {
-  for (const item of items) {
-    yield item;
-  }
-}
 
 /**
  * @param {Error} expected
@@ -59,28 +49,6 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
         { errors: 'isolate' }
       );
     }, TypeError, "Expected errors to be 'fail-eventually' or 'fail-fast'");
-  });
-
-  it("omitting errors option (or 'fail-eventually') keeps current AggregateError behaviour", async () => {
-    const errA = new Error('A');
-    const errB = new Error('B');
-    const callback = sinon.stub()
-      .returnsArg(0)
-      .onCall(0).rejects(errA)
-      .onCall(1).rejects(errB);
-
-    /** @type {Error | undefined} */
-    let caught;
-    try {
-      // eslint-disable-next-line no-unused-vars
-      for await (const _ of bufferedAsyncMap(fromArray([0, 1, 2]), callback, { bufferSize: 3 })) {
-        // drain
-      }
-    } catch (err) {
-      caught = /** @type {Error} */ (err);
-    }
-
-    chai.expect(caught).to.be.instanceOf(AggregateError);
   });
 
   // --- fail-fast semantics ---

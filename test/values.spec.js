@@ -14,6 +14,8 @@ import {
   isAsyncGenerator,
   nestedYieldValuesOverTime,
   promisableTimeout,
+  stubAsyncIterator,
+  unwrapCapturedError,
   yieldValuesOverTime,
   yieldValuesOverTimeWithPrefix,
 } from './utils.js';
@@ -23,29 +25,6 @@ chai.use(chaiQuantifiers);
 chai.use(sinonChai);
 
 chai.should();
-
-function stubAsyncIterator () {
-  const next = sinon.stub();
-  const returnStub = sinon.stub();
-  const throwStub = sinon.stub();
-
-  /** @satisfies {AsyncIterator<*>} */
-  const asyncIterator = {
-    next,
-    'return': returnStub,
-    'throw': throwStub,
-  };
-
-  /** @type {AsyncIterable<*>} */
-  const asyncIterable = {
-    [Symbol.asyncIterator]: () => asyncIterator,
-  };
-
-  return {
-    asyncIterable,
-    asyncIterator,
-  };
-}
 
 /**
  * @param {number} item
@@ -612,7 +591,7 @@ describe('bufferedAsyncMap() values', () => {
           throw new Error('Expected a rejection');
         },
         err => {
-          const captured = err instanceof AggregateError ? err.errors[0] : err;
+          const captured = unwrapCapturedError(err);
           captured.should.equal(rejectionError);
         }
       );
@@ -761,7 +740,7 @@ describe('bufferedAsyncMap() values', () => {
           throw new Error('Expected a rejection');
         },
         err => {
-          const captured = err instanceof AggregateError ? err.errors[0] : err;
+          const captured = unwrapCapturedError(err);
           captured.should.be.instanceOf(TypeError);
           captured.message.should.equal('Expected source iterator next() result to be an object');
         }
@@ -963,7 +942,7 @@ describe('bufferedAsyncMap() values', () => {
           throw new Error('Expected a rejection');
         },
         err => {
-          const captured = err instanceof AggregateError ? err.errors[0] : err;
+          const captured = unwrapCapturedError(err);
           captured.should.be.instanceOf(TypeError);
           captured.message.should.equal('Expected sub-iterator next() result to be an object');
         }

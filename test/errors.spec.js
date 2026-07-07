@@ -5,20 +5,12 @@ import sinon from 'sinon';
 import {
   bufferedAsyncMap,
 } from '../index.js';
+import {
+  fromArray,
+} from './utils.js';
 
 chai.use(chaiAsPromised);
 chai.should();
-
-/**
- * @template T
- * @param {T[]} items
- * @returns {AsyncIterable<T>}
- */
-async function * fromArray (items) {
-  for (const item of items) {
-    yield item;
-  }
-}
 
 /**
  * @param {Error} expected

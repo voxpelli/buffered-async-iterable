@@ -247,7 +247,7 @@ describe('bufferedAsyncMap() AsyncInterface return()', () => {
     })();
 
     await clock.runAllAsync();
-    const { during, returnResult, extraPulls } = await flow;
+    const { during, extraPulls, returnResult } = await flow;
 
     during.should.deep.equal({ done: true, value: undefined });
     returnResult.should.deep.equal({ done: true, value: 42 });

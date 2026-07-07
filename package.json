@@ -45,7 +45,7 @@
     "check:knip": "knip",
     "check:lint": "eslint --report-unused-disable-directives .",
     "check:tsc": "tsc",
-    "check:type-coverage": "type-coverage --detail --strict --at-least 99 --ignore-files 'test/*.spec.js' --ignore-files 'benchmark/**/*.js'",
+    "check:type-coverage": "type-coverage --detail --strict --at-least 99 --ignore-files 'test/**/*.js' --ignore-files 'benchmark/**/*.js'",
     "clean": "run-p clean:*",
     "clean:declarations": "rm -rf $(find . -maxdepth 2 -type f -name '*.d.ts*')",
     "prepare": "husky",

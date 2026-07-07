@@ -146,6 +146,7 @@ describe('bufferedAsyncMap() Symbol.asyncDispose', () => {
     })();
 
     await clock.runAllAsync();
-    (await flow).should.equal(true);
+    const settled = await flow;
+    settled.should.equal(true);
   });
 });

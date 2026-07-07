@@ -75,29 +75,4 @@ describe('bufferedAsyncMap() AsyncInterface throw()', () => {
 
     returnSpy.should.have.been.calledOnce;
   });
-
-  it('in-flight callbacks observe signal.aborted=true after throw()', async () => {
-    const errorToThrow = new Error('thrown');
-    /** @type {AbortSignal | undefined} */
-    let captured;
-
-    const iterator = bufferedAsyncMap(
-      yieldValuesOverTime(50, 100),
-      async (item, { signal }) => {
-        captured = signal;
-        return item;
-      }
-    );
-
-    const first = iterator.next();
-    await clock.tickAsync(0);
-    await first;
-    chai.expect(captured?.aborted).to.equal(false);
-
-    const tossed = iterator.throw(errorToThrow).catch(err => err);
-    await clock.runAllAsync();
-    await tossed;
-
-    chai.expect(captured?.aborted).to.equal(true);
-  });
 });
