@@ -29,16 +29,9 @@ export function stubAsyncIterator () {
   };
 }
 
-/**
- * @template T
- * @param {T[]} items
- * @returns {AsyncIterable<T>}
- */
-export async function * fromArray (items) {
-  for (const item of items) {
-    yield item;
-  }
-}
+// The "array → async iterable" test fixture is exactly the library's own
+// sync-to-async shim — re-export it rather than maintain a twin.
+export { makeIterableAsync as fromArray } from '../lib/misc.js';
 
 /**
  * The fail-eventually drain-throw convention: a single captured error is

@@ -11,6 +11,7 @@ import {
   mergeIterables,
 } from '../index.js';
 import {
+  collectNextOutcomes,
   isAsyncGenerator,
   nestedYieldValuesOverTime,
   promisableTimeout,
@@ -1250,23 +1251,9 @@ describe('bufferedAsyncMap() values', () => {
         throwingInput(),
       ], { errors: 'fail-fast' })[Symbol.asyncIterator]();
 
-      /** @type {Array<{ rejected: boolean, value?: unknown }>} */
-      const results = [];
-
-      const flow = (async () => {
-        for (let i = 0; i < 6; i += 1) {
-          try {
-            const r = await iterator.next();
-            results.push({ rejected: false, value: r });
-            if (r.done) break;
-          } catch (err) {
-            results.push({ rejected: true, value: err });
-          }
-        }
-      })();
-
+      const flow = collectNextOutcomes(iterator, 6);
       await clock.runAllAsync();
-      await flow;
+      const results = await flow;
 
       const firstReject = results.findIndex(r => r.rejected);
       chai.expect(firstReject).to.be.greaterThan(-1);

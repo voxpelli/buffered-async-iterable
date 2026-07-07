@@ -7,6 +7,8 @@ import {
   bufferedAsyncMap,
 } from '../index.js';
 import {
+  collectNextOutcomes,
+  expectSingleRejectionThenDone,
   fromArray,
   promisableTimeout,
   yieldValuesOverTime,
@@ -65,29 +67,10 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
       { errors: 'fail-fast', bufferSize: 2 }
     );
 
-    /** @type {Array<{ rejected: boolean, value?: unknown }>} */
-    const results = [];
-
-    const flow = (async () => {
-      for (let i = 0; i < 5; i += 1) {
-        try {
-          const r = await iterator.next();
-          results.push({ rejected: false, value: r });
-        } catch (err) {
-          results.push({ rejected: true, value: err });
-        }
-      }
-    })();
-
+    const flow = collectNextOutcomes(iterator, 5);
     await clock.runAllAsync();
-    await flow;
 
-    const firstReject = results.findIndex(r => r.rejected);
-    chai.expect(firstReject).to.be.greaterThan(-1);
-    chai.expect(results[firstReject]?.value).to.equal(reason);
-    for (const r of results.slice(firstReject + 1)) {
-      chai.expect(r).to.deep.equal({ rejected: false, value: { done: true, value: undefined } });
-    }
+    expectSingleRejectionThenDone(await flow, reason);
   });
 
   it('a synchronously-throwing callback short-circuits with the original error and closes the source', async () => {
@@ -114,29 +97,10 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
       return Promise.resolve(item);
     }, { errors: 'fail-fast', bufferSize: 2 });
 
-    /** @type {Array<{ rejected: boolean, value?: unknown }>} */
-    const results = [];
-
-    const flow = (async () => {
-      for (let i = 0; i < 5; i += 1) {
-        try {
-          const r = await iterator.next();
-          results.push({ rejected: false, value: r });
-        } catch (err) {
-          results.push({ rejected: true, value: err });
-        }
-      }
-    })();
-
+    const flow = collectNextOutcomes(iterator, 5);
     await clock.runAllAsync();
-    await flow;
 
-    const firstReject = results.findIndex(r => r.rejected);
-    chai.expect(firstReject).to.be.greaterThan(-1);
-    chai.expect(results[firstReject]?.value).to.equal(thrown);
-    for (const r of results.slice(firstReject + 1)) {
-      chai.expect(r).to.deep.equal({ rejected: false, value: { done: true, value: undefined } });
-    }
+    expectSingleRejectionThenDone(await flow, thrown);
     returnSpy.should.have.been.calledOnce;
   });
 
@@ -157,31 +121,12 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
 
     const iterator = bufferedAsyncMap(['a'], callback, { errors: 'fail-fast', bufferSize: 2 });
 
-    /** @type {Array<{ rejected: boolean, value?: unknown }>} */
-    const results = [];
-
-    const flow = (async () => {
-      for (let i = 0; i < 5; i += 1) {
-        try {
-          const r = await iterator.next();
-          results.push({ rejected: false, value: r });
-        } catch (err) {
-          results.push({ rejected: true, value: err });
-        }
-      }
-    })();
-
+    const flow = collectNextOutcomes(iterator, 5);
     await clock.runAllAsync();
-    await flow;
 
     // Exactly one rejection with the original error, then done forever — the
     // pre-fix repro leaked further sub-iterator values AFTER the rejection.
-    const firstReject = results.findIndex(r => r.rejected);
-    chai.expect(firstReject).to.be.greaterThan(-1);
-    chai.expect(results[firstReject]?.value).to.equal(thrown);
-    for (const r of results.slice(firstReject + 1)) {
-      chai.expect(r).to.deep.equal({ rejected: false, value: { done: true, value: undefined } });
-    }
+    expectSingleRejectionThenDone(await flow, thrown);
   });
 
   it('drops a fail-fast error that lost the shutdown race to a synchronous abort (abort wins, once)', async () => {
@@ -204,28 +149,10 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
 
     const iterator = bufferedAsyncMap(['a'], callback, { errors: 'fail-fast', signal: ac.signal, bufferSize: 1 });
 
-    /** @type {Array<{ rejected: boolean, value?: unknown }>} */
-    const results = [];
-    const flow = (async () => {
-      for (let i = 0; i < 3; i += 1) {
-        try {
-          const r = await iterator.next();
-          results.push({ rejected: false, value: r });
-        } catch (err) {
-          results.push({ rejected: true, value: err });
-        }
-      }
-    })();
-
+    const flow = collectNextOutcomes(iterator, 3);
     await clock.runAllAsync();
-    await flow;
 
-    const rejections = results.filter(r => r.rejected);
-    rejections.should.have.length(1);
-    chai.expect(rejections[0]?.value).to.equal(reason);
-    for (const r of results.slice(results.findIndex(x => x.rejected) + 1)) {
-      chai.expect(r).to.deep.equal({ rejected: false, value: { done: true, value: undefined } });
-    }
+    expectSingleRejectionThenDone(await flow, reason);
   });
 
   it('discards the second of two racing errors (Promise.all parity)', async () => {
@@ -242,28 +169,13 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
       { errors: 'fail-fast', bufferSize: 3 }
     );
 
-    /** @type {Array<{ rejected: boolean, value?: unknown }>} */
-    const results = [];
-    const flow = (async () => {
-      for (let i = 0; i < 4; i += 1) {
-        try {
-          const r = await iterator.next();
-          results.push({ rejected: false, value: r });
-        } catch (err) {
-          results.push({ rejected: true, value: err });
-        }
-      }
-    })();
-
+    const flow = collectNextOutcomes(iterator, 4);
     await clock.runAllAsync();
-    await flow;
 
     // Exactly one rejection carrying the FIRST error; the second vanishes at
     // the envelope level (its slot is spliced by cleanup) — no
     // AggregateError, no second rejection.
-    const rejections = results.filter(r => r.rejected);
-    rejections.should.have.length(1);
-    chai.expect(rejections[0]?.value).to.equal(errA);
+    expectSingleRejectionThenDone(await flow, errA);
   });
 
   it('source error fails fast', async () => {

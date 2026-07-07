@@ -210,8 +210,11 @@ describe('bufferedAsyncMap() basic', () => {
     // Deliberately NOT exercised here: an async-generator source (V8's
     // generator request queue makes N eagerly-enqueued next() calls
     // quadratic — external to this library) and a full for-await drain
-    // (walks the ~100k exhausted-source slots one race at a time). Both are
+    // (walks the exhausted-source slots one race at a time). Both are
     // pre-existing costs of huge buffers, not what this spec pins.
+    //
+    // 20_000 = ~3× the measured ≈7000-frame crash point at ~1/10 the
+    // runtime of the original 100_000 — same regression power, cheaper.
     const values = ['a', 'b', 'c'];
     let i = 0;
     /** @type {AsyncIterable<string>} */
@@ -223,7 +226,7 @@ describe('bufferedAsyncMap() basic', () => {
       }),
     };
 
-    const iterator = bufferedAsyncMap(source, async (item) => item, { bufferSize: 100_000 });
+    const iterator = bufferedAsyncMap(source, async (item) => item, { bufferSize: 20_000 });
 
     /** @type {string[]} */
     const collected = [];

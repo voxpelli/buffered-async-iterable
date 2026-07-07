@@ -11,6 +11,8 @@ import {
   bufferedAsyncMap,
 } from '../index.js';
 import {
+  collectNextOutcomes,
+  expectSingleRejectionThenDone,
   promisableTimeout,
   yieldValuesOverTime,
 } from './utils.js';
@@ -168,26 +170,14 @@ describe('bufferedAsyncMap() options.signal', () => {
 
     ac.abort(reason);
 
-    /** @type {Array<{ rejected: boolean, value?: unknown }>} */
-    const results = [];
-
-    const sequence = (async () => {
-      for (let i = 0; i < 3; i += 1) {
-        try {
-          const r = await iterator.next();
-          results.push({ rejected: false, value: r });
-        } catch (err) {
-          results.push({ rejected: true, value: err });
-        }
-      }
-    })();
-
+    const sequence = collectNextOutcomes(iterator, 3);
     await clock.runAllAsync();
-    await sequence;
+    const results = await sequence;
 
+    // The rejection lands on the very FIRST post-abort pull (stronger than
+    // the helper's exactly-once: no value may precede it).
     chai.expect(results[0]).to.deep.equal({ rejected: true, value: reason });
-    chai.expect(results[1]).to.deep.equal({ rejected: false, value: { done: true, value: undefined } });
-    chai.expect(results[2]).to.deep.equal({ rejected: false, value: { done: true, value: undefined } });
+    expectSingleRejectionThenDone(results, reason);
   });
 
   it('source.next not called after abort; source.return called once', async () => {
@@ -406,16 +396,7 @@ describe('bufferedAsyncMap() options.signal', () => {
         ac.abort(reason);
       })();
 
-      /** @type {Array<{ rejected: boolean, value?: unknown }>} */
-      const outcomes = [];
-      for (let i = 0; i < 3; i++) {
-        try {
-          const r = await iterator.next();
-          outcomes.push({ rejected: false, value: r });
-        } catch (err) {
-          outcomes.push({ rejected: true, value: err });
-        }
-      }
+      const outcomes = await collectNextOutcomes(iterator, 3);
       await abortTask;
 
       const rejections = outcomes.filter(o => o.rejected);
