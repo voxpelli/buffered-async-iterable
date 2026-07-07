@@ -20,8 +20,8 @@ export async function * asyncRange (count) {
 
 /**
  * Sync iterable yielding integers `0 .. count - 1`. Exercises the
- * `isIterable` → `makeIterableAsync` branch — no async-generator fixture
- * reaches it.
+ * sync-fallback dispatch (captured `Symbol.iterator` member fed through the
+ * `makeIterableAsync` shim) — no async-generator fixture reaches it.
  *
  * @param {number} count
  * @returns {Generator<number>}

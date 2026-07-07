@@ -12,6 +12,7 @@ import {
 } from '../index.js';
 import {
   collectNextOutcomes,
+  expectSingleRejectionThenDone,
   isAsyncGenerator,
   nestedYieldValuesOverTime,
   promisableTimeout,
@@ -1253,11 +1254,8 @@ describe('bufferedAsyncMap() values', () => {
 
       const flow = collectNextOutcomes(iterator, 6);
       await clock.runAllAsync();
-      const results = await flow;
 
-      const firstReject = results.findIndex(r => r.rejected);
-      chai.expect(firstReject).to.be.greaterThan(-1);
-      chai.expect(results[firstReject]?.value).to.equal(sourceError);
+      expectSingleRejectionThenDone(await flow, sourceError);
     });
 
     it('exposes Symbol.asyncDispose on the merged iterator', async () => {

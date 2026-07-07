@@ -11,6 +11,7 @@ import {
 import {
   collectNextOutcomes,
   expectSingleRejectionThenDone,
+  promisableTimeout,
   unwrapCapturedError,
 } from './utils.js';
 
@@ -20,8 +21,9 @@ chai.should();
 
 /**
  * A source whose n:th result object is hostile (throwing getter / Proxy
- * trap); every result before it is a plain value. All timer-free — these
- * specs run without fake timers.
+ * trap); every result before it is a plain value. Timer-free itself; this
+ * file runs WITHOUT sinon fake timers (one spec uses a real 20 ms delay —
+ * adding fake timers here would deadlock it).
  *
  * @param {number} hostileAt zero-based index of the hostile result
  * @param {() => object} makeHostile
@@ -278,7 +280,7 @@ describe('bufferedAsyncMap() hostile iterator results', () => {
         next: async () => {
           mainPulls += 1;
           if (mainPulls === 1) {
-            await new Promise(resolve => { setTimeout(resolve, 20); });
+            await promisableTimeout(20);
             return { done: false, value: 'x' };
           }
           return { done: true, value: undefined };

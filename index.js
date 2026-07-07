@@ -96,8 +96,9 @@ async function * yieldIterable (item) {
  * or boxed — are deliberately rejected even though they're iterable:
  * merging 'abc' as the chars 'a','b','c' is almost always a caller mistake
  * — spread the string explicitly if chars are wanted. The protocol member
- * is read once here and re-read at iteration; elements with exotic one-shot
- * getter members are unsupported, same as the main input.
+ * is read once here and re-read at iteration, so elements with exotic
+ * one-shot getter members are unsupported — deliberately stricter than the
+ * main input, whose member is captured on a single read and invoked.
  *
  * @template T
  * @param {Array<AsyncIterable<T> | (Iterable<T> & object) | T[]>} input
@@ -730,6 +731,7 @@ export function bufferedAsyncMap (input, callback, options) {
     }
 
     return (bufferedPromises.length === 0 && !abortReason)
+      // `true` = drain: surface any captured fail-eventually errors.
       ? markAsEnded(true)
       : nextValue();
   };

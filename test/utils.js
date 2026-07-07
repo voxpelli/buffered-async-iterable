@@ -90,8 +90,11 @@ export function expectSingleRejectionThenDone (outcomes, expectedErr) {
   const firstReject = outcomes.findIndex(o => o.rejected);
   for (const o of outcomes.slice(firstReject + 1)) {
     const r = /** @type {{ done?: boolean, value?: unknown }} */ (o.value);
-    if (o.rejected || r?.done !== true || r?.value !== undefined) {
-      throw new Error(`Expected { done: true, value: undefined } after the rejection, saw ${JSON.stringify(o)}`);
+    // The key-count check matches the strictness of a deep-equal against
+    // { done: true, value: undefined } — a leaked internal envelope with
+    // extra enumerable keys must fail even when done/value look right.
+    if (o.rejected || r?.done !== true || r?.value !== undefined || Object.keys(r).length !== 2) {
+      throw new Error(`Expected exactly { done: true, value: undefined } after the rejection, saw ${JSON.stringify(o)}`);
     }
   }
 }
