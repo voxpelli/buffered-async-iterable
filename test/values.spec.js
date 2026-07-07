@@ -810,6 +810,135 @@ describe('bufferedAsyncMap() values', () => {
     unhandled.should.be.an('array').with.length(0);
   });
 
+  it('routes a synchronously-throwing callback through the errors mode', async () => {
+    const thrown = new Error('sync-throw');
+
+    /** @type {string[]} */
+    const drained = [];
+
+    // Plain (non-async) callback that throws synchronously — must become the
+    // same {err} envelope as a rejection, not a raw bufferPromise rejection
+    // that bypasses fail-eventually (pre-fix: no drain, infinite rejections).
+    const flow = (async () => {
+      for await (const value of bufferedAsyncMap(['a', 'b', 'c'], (item) => {
+        if (item === 'b') throw thrown;
+        return Promise.resolve(item);
+      })) {
+        drained.push(value);
+      }
+    })()
+      .then(
+        () => {
+          throw new Error('Expected a rejection');
+        },
+        err => ({ rejectedWith: err })
+      );
+
+    await clock.runAllAsync();
+    const outcome = await flow;
+
+    // fail-eventually drained the in-flight siblings before throwing…
+    drained.should.deep.equal(['a', 'c']);
+    // …and the single captured error keeps its identity.
+    chai.expect(outcome.rejectedWith).to.equal(thrown);
+  });
+
+  it('does not emit unhandledRejection when a sync-throwing callback slot is never consumed', async () => {
+    /** @type {unknown[]} */
+    const unhandled = [];
+    /**
+     * @param {unknown} reason
+     * @returns {void}
+     */
+    const listener = (reason) => { unhandled.push(reason); };
+    process.on('unhandledRejection', listener);
+
+    try {
+      const flow = (async () => {
+        // Construction eagerly dispatches all three callbacks; the sync throw
+        // poisons a buffer slot that return() then splices without racing.
+        const iterator = bufferedAsyncMap(['a', 'b', 'c'], (item) => {
+          if (item === 'b') throw new Error('poison');
+          return Promise.resolve(item);
+        }, { bufferSize: 3 });
+
+        await iterator.return();
+      })();
+
+      await clock.runAllAsync();
+      await flow;
+      await clock.runAllAsync();
+    } finally {
+      process.off('unhandledRejection', listener);
+    }
+
+    unhandled.should.be.an('array').with.length(0);
+  });
+
+  it('yields values from a source whose results carry their own err property', async () => {
+    // Spec-legal IteratorResults may carry extra fields — e.g. a driver that
+    // reuses one result-object shape with an (unset) `err` slot. These must
+    // not be mistaken for the library's internal error envelopes.
+    /** @type {Array<IteratorResult<string> & { err: unknown }>} */
+    const results = [
+      { done: false, value: 'item0', err: undefined },
+      // eslint-disable-next-line unicorn/no-null -- a null err property is exactly the foreign shape under test
+      { done: false, value: 'item1', err: null },
+      { done: true, value: undefined, err: undefined },
+    ];
+    let i = 0;
+    /** @type {AsyncIterable<string>} */
+    const source = {
+      [Symbol.asyncIterator]: () => ({
+        // Clamp: the prefetch pulls up to bufferSize results before the first
+        // one resolves, so keep answering `done` past the end.
+        next: async () => /** @type {IteratorResult<string>} */ (results[Math.min(i++, results.length - 1)]),
+      }),
+    };
+
+    const flow = (async () => {
+      /** @type {string[]} */
+      const collected = [];
+      for await (const value of bufferedAsyncMap(source, async item => item)) {
+        collected.push(value);
+      }
+      return collected;
+    })();
+
+    await clock.runAllAsync();
+    const collected = await flow;
+    collected.should.deep.equal(['item0', 'item1']);
+  });
+
+  it('yields values from a sub-iterable whose results carry their own err property', async () => {
+    /** @type {Array<IteratorResult<string> & { err: unknown }>} */
+    const results = [
+      { done: false, value: 'sub0', err: undefined },
+      { done: false, value: 'sub1', err: undefined },
+      { done: true, value: undefined, err: undefined },
+    ];
+    let i = 0;
+    /** @type {(item: string) => AsyncIterable<string>} */
+    const callback = () => ({
+      [Symbol.asyncIterator]: () => ({
+        next: async () => /** @type {IteratorResult<string>} */ (results[Math.min(i++, results.length - 1)]),
+      }),
+    });
+
+    const flow = (async () => {
+      /** @type {string[]} */
+      const collected = [];
+      for await (const value of bufferedAsyncMap(['a'], callback)) {
+        collected.push(value);
+      }
+      return collected;
+    })();
+
+    await clock.runAllAsync();
+    const collected = await flow;
+    collected.should.deep.equal(['sub0', 'sub1']);
+  });
+
   it('should throw TypeError on non-object value from AsyncIterator interface on subIterator', async () => {
     const {
       asyncIterable,

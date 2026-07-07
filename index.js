@@ -6,6 +6,13 @@ import {
   isAsyncIterable, isIterable, isObject, isPartOfArray,
 } from './lib/type-checks.js';
 
+// Tags the internal catch-envelope produced when a source / sub-iterator
+// next() rejects (or throws synchronously). A private symbol cannot collide
+// with properties on foreign IteratorResults — discriminating on a string
+// key ('err' in result) silently converted spec-legal results that happened
+// to carry their own `err` property into error envelopes, dropping values.
+const ERR = Symbol('bufferedAsyncMap error');
+
 /**
  * @template T
  * @param {AsyncIterable<T> | Iterable<T> | T[]} item
@@ -67,7 +74,7 @@ export function mergeIterables (input, options) {
  * @returns {BufferedAsyncIterableIterator<R>}
  */
 export function bufferedAsyncMap (input, callback, options) {
-  /** @typedef {Promise<IteratorResult<R | AsyncIterable<R>, undefined> & { bufferPromise: BufferPromise, fromSubIterator?: boolean, isSubIterator?: boolean, err?: unknown }>} BufferPromise */
+  /** @typedef {Promise<{ bufferPromise: BufferPromise, isSubIterator: boolean, value: R | AsyncIterable<R> | undefined, fromSubIterator?: boolean, done?: boolean, err?: Error | undefined }>} BufferPromise */
   const {
     bufferSize = 6,
     cleanupTimeout,
@@ -249,6 +256,43 @@ export function bufferedAsyncMap (input, callback, options) {
     return { done: true, value: undefined };
   };
 
+  // The two envelope shapes every buffer slot resolves to, each with a
+  // single construction site so its V8 hidden class is structural, not
+  // comment-enforced. The value shape is deliberately lean — the consumer's
+  // hot path only reads isSubIterator/value, so it stays the 3-field object
+  // it always was (bufferSize-scaling benches regress ~10-15% if the hot
+  // literal grows to carry the terminal-only fields). The terminal shape
+  // carries the drain bookkeeping (fromSubIterator/done/err). Two stable
+  // maps keep nextValue's property loads cheaply polymorphic. Envelopes
+  // never reject: the pipeline below catches rejections, sync throws and
+  // malformed results alike, which is what makes nextValue's Promise.race
+  // reject-proof and lets markAsEnded splice pending slots without creating
+  // unhandled rejections.
+
+  /**
+   * @param {BufferPromise} bufferPromise
+   * @param {boolean} isSubIterator
+   * @param {R | AsyncIterable<R>} value
+   * @returns {Awaited<BufferPromise>}
+   */
+  // eslint-disable-next-line unicorn/consistent-function-scoping
+  const valueEnvelope = (bufferPromise, isSubIterator, value) =>
+    ({ bufferPromise, isSubIterator, value });
+
+  /**
+   * Terminal slot: `done` and/or `err`. All fields set (explicitly
+   * `undefined` when absent) for one shared hidden class across the done,
+   * error and malformed arms.
+   *
+   * @param {BufferPromise} bufferPromise
+   * @param {boolean} fromSubIterator
+   * @param {Error} [err]
+   * @returns {Awaited<BufferPromise>}
+   */
+
+  const terminalEnvelope = (bufferPromise, fromSubIterator, err) =>
+    ({ bufferPromise, isSubIterator: false, value: undefined, fromSubIterator, done: true, err });
+
   // Producer: pulls from source up to bufferSize, dispatches via callback,
   // pushes the wrapped promise into bufferedPromises. In `ordered: true`
   // mode it always feeds from subIterators[0]; in `ordered: false` mode it
@@ -274,117 +318,91 @@ export function bufferedAsyncMap (input, callback, options) {
       currentSubIterator = isPartOfArray(iterator, subIterators) ? iterator : undefined;
     }
 
+    // A sync-throwing .next() must flow through the same envelope path as a
+    // rejecting one — evaluate it inside try/catch and let the adjacent
+    // .catch (attached synchronously, so there is no unhandledRejection
+    // window) normalize both into the ERR-tagged catch-envelope.
+    //
+    // Discrimination order in the .then matters: isObject first (`in` throws
+    // on primitives, and a malformed next() can resolve to one), then the
+    // ERR tag, then done.
     /** @type {BufferPromise} */
-    const bufferPromise = currentSubIterator
-      ? Promise.resolve(currentSubIterator.next())
+    let bufferPromise;
+
+    if (currentSubIterator) {
+      const subIterator = currentSubIterator;
+
+      /** @type {Promise<IteratorResult<R, void>>} */
+      let step;
+      try {
+        step = subIterator.next();
+      } catch (err) {
+        step = Promise.reject(err);
+      }
+
+      bufferPromise = Promise.resolve(step)
         .catch((/** @type {unknown} */ err) => ({
-          err: normalizeError(err, 'Unknown subiterator error'),
+          [ERR]: normalizeError(err, 'Unknown subiterator error'),
         }))
-        .then(async result => {
+        .then(result => {
           if (!isObject(result)) {
-            arrayDeleteInPlace(subIterators, currentSubIterator);
-            // Keep the field order identical to the `'err' in result` arm below
-            // so V8 sees one hidden class for the done+err envelope shape.
-            return {
-              bufferPromise,
-              fromSubIterator: true,
-              done: true,
-              value: undefined,
-              err: new TypeError('Expected sub-iterator next() result to be an object'),
-            };
+            arrayDeleteInPlace(subIterators, subIterator);
+            return terminalEnvelope(bufferPromise, true, new TypeError('Expected sub-iterator next() result to be an object'));
           }
-          if ('err' in result || result.done) {
-            arrayDeleteInPlace(subIterators, currentSubIterator);
+          if (ERR in result) {
+            arrayDeleteInPlace(subIterators, subIterator);
+            return terminalEnvelope(bufferPromise, true, result[ERR]);
+          }
+          if (result.done) {
+            arrayDeleteInPlace(subIterators, subIterator);
+            return terminalEnvelope(bufferPromise, true);
           }
 
-          /** @type {Awaited<BufferPromise>} */
-          let promiseValue;
-          if ('err' in result) {
-            promiseValue = {
-              bufferPromise,
-              fromSubIterator: true,
-              done: true,
-              value: undefined,
-              err: result.err,
-            };
-          } else if (result.done) {
-            promiseValue = {
-              bufferPromise,
-              fromSubIterator: true,
-              done: true,
-              value: undefined,
-            };
-          } else {
-            promiseValue = {
-              bufferPromise,
-              fromSubIterator: true,
-              done: false,
-              value: result.value,
-            };
-          }
+          return valueEnvelope(bufferPromise, false, result.value);
+        });
+    } else {
+      /** @type {Promise<IteratorResult<T, void>>} */
+      let step;
+      try {
+        step = asyncIterator.next();
+      } catch (err) {
+        step = Promise.reject(err);
+      }
 
-          return promiseValue;
-        })
-      : Promise.resolve(asyncIterator.next())
+      bufferPromise = Promise.resolve(step)
         .catch((/** @type {unknown} */ err) => ({
-          err: normalizeError(err, 'Unknown iterator error'),
+          [ERR]: normalizeError(err, 'Unknown iterator error'),
         }))
         .then(async result => {
           if (!isObject(result)) {
             mainReturnedDone = true;
-            // Same field order as the `'err' in result` / callback-catch arms
-            // so the done+err envelope shares one hidden class.
-            return {
-              bufferPromise,
-              done: true,
-              value: undefined,
-              err: new TypeError('Expected source iterator next() result to be an object'),
-            };
+            return terminalEnvelope(bufferPromise, false, new TypeError('Expected source iterator next() result to be an object'));
           }
-          if ('err' in result) {
+          if (ERR in result) {
             mainReturnedDone = true;
-            return {
-              bufferPromise,
-              done: true,
-              value: undefined,
-              err: result.err,
-            };
+            return terminalEnvelope(bufferPromise, false, result[ERR]);
           }
           if (result.done) {
             mainReturnedDone = true;
-            return {
-              bufferPromise,
-              done: true,
-              value: undefined,
-            };
+            return terminalEnvelope(bufferPromise, false);
           }
 
-          // eslint-disable-next-line promise/no-callback-in-promise
-          const callbackResult = callback(result.value, { signal: internalAbortController.signal });
-          const isSubIterator = isAsyncIterable(callbackResult);
-
-          /** @type {Awaited<BufferPromise>} */
-          let promiseValue;
-
+          // The dispatch sits inside the try so a synchronously-throwing
+          // plain (non-async) callback becomes the same {err} envelope as a
+          // rejecting one — otherwise it would reject the raw bufferPromise,
+          // bypassing the errors mode entirely.
           try {
+            // eslint-disable-next-line promise/no-callback-in-promise
+            const callbackResult = callback(result.value, { signal: internalAbortController.signal });
+            const isSubIterator = isAsyncIterable(callbackResult);
             const value = await callbackResult;
 
-            promiseValue = {
-              bufferPromise,
-              isSubIterator,
-              value,
-            };
+            return valueEnvelope(bufferPromise, isSubIterator, value);
           } catch (err) {
-            promiseValue = {
-              bufferPromise,
-              done: true,
-              value: undefined,
-              err: normalizeError(err, 'Unknown callback error'),
-            };
+            return terminalEnvelope(bufferPromise, false, normalizeError(err, 'Unknown callback error'));
           }
-
-          return promiseValue;
         });
+    }
 
     promisesToSourceIteratorMap.set(bufferPromise, currentSubIterator || asyncIterator);
 
@@ -503,11 +521,12 @@ export function bufferedAsyncMap (input, callback, options) {
         : [...bufferedPromises, parkPromise]
     );
 
-    // Cleared on the happy path. If the await above threw — which it only can
-    // when a buffered promise's .then wrapper observes a malformed iterator
-    // result — currentPark stays pointing at the (now-orphaned) park; that's
-    // harmless because the next nextValue() call reassigns it and only the
-    // current park is ever resolved by the abort listener.
+    // Cleared unconditionally: every buffer slot resolves to an envelope
+    // (fillQueue's pipeline catches rejections, sync throws and malformed
+    // results alike), so the race above cannot reject and this line is
+    // always reached. Single-flight is what makes the one mutable park slot
+    // safe — guaranteed structurally by next()'s currentStep chaining; the
+    // other close paths (return/throw/dispose) never call nextValue().
     currentPark = undefined;
 
     if (raced === ABORT_SENTINEL || abortReason) {

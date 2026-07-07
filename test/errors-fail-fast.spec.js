@@ -122,6 +122,100 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
     }
   });
 
+  it('a synchronously-throwing callback short-circuits with the original error and closes the source', async () => {
+    const thrown = new Error('sync-fail-fast');
+    const returnSpy = sinon.spy();
+
+    /** @returns {AsyncIterable<number>} */
+    async function * source () {
+      try {
+        yield 0;
+        yield 1;
+        yield 2;
+        yield 3;
+      } finally {
+        returnSpy();
+      }
+    }
+
+    // Plain (non-async) callback that throws synchronously — pre-fix this
+    // rejected the raw buffer slot: every next() rejected forever and the
+    // source's finally never ran.
+    const iterator = bufferedAsyncMap(source(), (item) => {
+      if (item === 1) throw thrown;
+      return Promise.resolve(item);
+    }, { errors: 'fail-fast', bufferSize: 2 });
+
+    /** @type {Array<{ rejected: boolean, value?: unknown }>} */
+    const results = [];
+
+    const flow = (async () => {
+      for (let i = 0; i < 5; i += 1) {
+        try {
+          const r = await iterator.next();
+          results.push({ rejected: false, value: r });
+        } catch (err) {
+          results.push({ rejected: true, value: err });
+        }
+      }
+    })();
+
+    await clock.runAllAsync();
+    await flow;
+
+    const firstReject = results.findIndex(r => r.rejected);
+    chai.expect(firstReject).to.be.greaterThan(-1);
+    chai.expect(results[firstReject]?.value).to.equal(thrown);
+    for (const r of results.slice(firstReject + 1)) {
+      chai.expect(r).to.deep.equal({ rejected: false, value: { done: true, value: undefined } });
+    }
+    returnSpy.should.have.been.calledOnce;
+  });
+
+  it('a sub-iterator whose next() throws synchronously rejects once then closes', async () => {
+    const thrown = new Error('sync-next-boom');
+
+    let calls = 0;
+    /** @type {(item: string) => AsyncIterable<string>} */
+    const callback = () => ({
+      [Symbol.asyncIterator]: () => ({
+        next: () => {
+          calls += 1;
+          if (calls === 2) throw thrown;
+          return Promise.resolve(/** @type {IteratorResult<string>} */ ({ done: false, value: `sub-${calls}` }));
+        },
+      }),
+    });
+
+    const iterator = bufferedAsyncMap(['a'], callback, { errors: 'fail-fast', bufferSize: 2 });
+
+    /** @type {Array<{ rejected: boolean, value?: unknown }>} */
+    const results = [];
+
+    const flow = (async () => {
+      for (let i = 0; i < 5; i += 1) {
+        try {
+          const r = await iterator.next();
+          results.push({ rejected: false, value: r });
+        } catch (err) {
+          results.push({ rejected: true, value: err });
+        }
+      }
+    })();
+
+    await clock.runAllAsync();
+    await flow;
+
+    // Exactly one rejection with the original error, then done forever — the
+    // pre-fix repro leaked further sub-iterator values AFTER the rejection.
+    const firstReject = results.findIndex(r => r.rejected);
+    chai.expect(firstReject).to.be.greaterThan(-1);
+    chai.expect(results[firstReject]?.value).to.equal(thrown);
+    for (const r of results.slice(firstReject + 1)) {
+      chai.expect(r).to.deep.equal({ rejected: false, value: { done: true, value: undefined } });
+    }
+  });
+
   it('source error fails fast', async () => {
     const sourceError = new Error('src-error');
 
