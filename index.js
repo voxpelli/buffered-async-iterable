@@ -561,7 +561,10 @@ export function bufferedAsyncMap (input, callback, options) {
     const nextBufferedPromise = bufferedPromises[0];
 
     if (!nextBufferedPromise) return markAsEnded(true);
-    if (isDone) return { done: true, value: undefined };
+    // Routed through markAsEnded (not a bare { done: true }) so a pull that
+    // observes a concurrent closer's isDone still awaits that closer's
+    // in-flight cleanup before resolving — the await-idempotence contract.
+    if (isDone) return markAsEnded();
 
     // Fresh per-pull park: the executor runs synchronously, so currentPark is
     // set before the race below. parkPromise is the last entry in the race so
@@ -630,9 +633,10 @@ export function bufferedAsyncMap (input, callback, options) {
         : nextValue();
     };
 
-    // We are mandated by the spec to always do this return if the iterator is done
+    // We are mandated by the spec to always do this return if the iterator is
+    // done — via markAsEnded so the concurrent closer's cleanup is awaited too
     if (isDone) {
-      return { done: true, value: undefined };
+      return markAsEnded();
     } else if (err || done) {
       if (err) {
         const handled = await handleStreamError(normalizeError(err, 'Unknown error'));
@@ -691,21 +695,28 @@ export function bufferedAsyncMap (input, callback, options) {
     // propagates — matching the "as-if a `return value;` was inserted at the
     // suspension point" model (`finally` blocks run regardless).
     'return': async (value) => {
+      // Close BEFORE awaiting the argument: native AsyncGenerator enqueues
+      // the return request immediately, so a concurrent next() during a
+      // still-pending return(thenable) resolves { done: true } and the
+      // source is not pulled further. `false` = don't throw captured
+      // fail-eventually errors on top of the consumer's explicit early
+      // exit; with that flag markAsEnded never rejects, so capturing its
+      // promise before the await is safe.
+      const ended = markAsEnded(false);
+
       /** @type {R | undefined} */
       let awaited;
       try {
         awaited = await value;
       } catch (err) {
-        await markAsEnded();
+        await ended;
         throw err;
       }
 
-      // `false` = don't throw captured fail-eventually errors; return(value)
-      // shouldn't surface earlier callback errors on top of the consumer's
-      // explicit early exit. The resolved value is threaded back here so the
-      // IteratorResult mirrors *this* call's argument even after the iterator
-      // has already closed.
-      await markAsEnded(false);
+      // The resolved value is threaded back here so the IteratorResult
+      // mirrors *this* call's argument even after the iterator has already
+      // closed.
+      await ended;
       return { done: true, value: awaited };
     },
     'throw': async (err) => {

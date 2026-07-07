@@ -219,6 +219,41 @@ describe('bufferedAsyncMap() AsyncInterface return()', () => {
     subReturn.should.have.been.calledOnce;
   });
 
+  it('closes synchronously when return() receives a pending thenable', async () => {
+    const source = yieldValuesOverTime(6, 100);
+    const sourceIterator = source[Symbol.asyncIterator]();
+    const nextSpy = sinon.spy(sourceIterator, 'next');
+
+    const iterator = bufferedAsyncMap(
+      { [Symbol.asyncIterator]: () => sourceIterator },
+      async (item) => item,
+      { bufferSize: 2 }
+    );
+
+    const flow = (async () => {
+      await iterator.next();
+      const pullsAtReturn = nextSpy.callCount;
+
+      // return() with a slow thenable: the iterator must close NOW — native
+      // AsyncGenerator queues the requests, so a concurrent next() gets
+      // { done: true } and no further source pulls happen while the
+      // argument settles. Pre-fix the await window left the iterator open:
+      // next() kept yielding and fillQueue kept pulling.
+      const returned = iterator.return(promisableTimeout(5000).then(() => 42));
+      const during = await iterator.next();
+
+      const returnResult = await returned;
+      return { during, returnResult, extraPulls: nextSpy.callCount - pullsAtReturn };
+    })();
+
+    await clock.runAllAsync();
+    const { during, returnResult, extraPulls } = await flow;
+
+    during.should.deep.equal({ done: true, value: undefined });
+    returnResult.should.deep.equal({ done: true, value: 42 });
+    extraPulls.should.equal(0);
+  });
+
   it('resolves a parked next() only after the closing cleanup has settled', async () => {
     let finallySettled = false;
 
