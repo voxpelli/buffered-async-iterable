@@ -1,5 +1,7 @@
 /* eslint-disable promise/prefer-await-to-then */
 
+import { getEventListeners } from 'node:events';
+
 import chai from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import sinon from 'sinon';
@@ -383,6 +385,32 @@ describe('bufferedAsyncMap() options.signal', () => {
     const after = iterator.next();
     await clock.runAllAsync();
     await after.should.eventually.deep.equal({ done: true, value: undefined });
+  });
+
+  // --- external-signal listener lifecycle ---
+
+  it('detaches its external-signal abort listener when the iterator closes', async () => {
+    const ac = new AbortController();
+
+    // Several sequential short-lived iterators sharing one long-lived signal —
+    // the standard server pattern. Each must remove its listener on close
+    // (natural drain and early return() alike), or the signal retains every
+    // closed iterator's state machine until the signal itself aborts / is GC'd.
+    for (let i = 0; i < 5; i++) {
+      const iterator = bufferedAsyncMap(['a', 'b'], async (item) => item, { signal: ac.signal });
+
+      getEventListeners(ac.signal, 'abort').length.should.equal(1);
+
+      if (i % 2 === 0) {
+        // Timer-free array source, so the inline for-await is safe under fake timers
+        // eslint-disable-next-line no-unused-vars, no-empty
+        for await (const _value of iterator) {}
+      } else {
+        await iterator.return();
+      }
+    }
+
+    getEventListeners(ac.signal, 'abort').length.should.equal(0);
   });
 
   // --- cleanupTimeout ---

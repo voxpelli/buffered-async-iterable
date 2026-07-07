@@ -136,6 +136,12 @@ export function bufferedAsyncMap (input, callback, options) {
       abortReason = { reason: safeSignal.reason, delivered: false };
       internalAbortController.abort(safeSignal.reason);
     } else {
+      // `signal:` ties the listener's lifetime to the internal controller,
+      // which markAsEnded always aborts — so a closed iterator detaches from
+      // the (possibly long-lived) external signal instead of retaining this
+      // closure (and transitively the whole state machine) until the external
+      // signal fires or is GC'd. On external abort the listener runs first,
+      // then the internal abort it triggers retires it — same net effect.
       safeSignal.addEventListener('abort', () => {
         // If the iterator already closed via return()/throw()/dispose, abort is too late: no-op.
         if (isDone) return;
@@ -145,7 +151,7 @@ export function bufferedAsyncMap (input, callback, options) {
         if (!internalAbortController.signal.aborted) {
           internalAbortController.abort(safeSignal.reason);
         }
-      }, { once: true });
+      }, { once: true, signal: internalAbortController.signal });
     }
   }
 
