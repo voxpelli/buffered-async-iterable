@@ -71,6 +71,19 @@ export async function collectNextOutcomes (iterator, n) {
 }
 
 /**
+ * The strict shape check for a terminal result: exactly
+ * `{ done: true, value: undefined }` with no extra enumerable keys — a
+ * leaked internal envelope must fail even when done/value look right.
+ *
+ * @param {unknown} result
+ * @returns {result is { done: true, value: undefined }}
+ */
+export function isCleanDone (result) {
+  const r = /** @type {{ done?: boolean, value?: unknown }} */ (result);
+  return Boolean(r) && r.done === true && r.value === undefined && Object.keys(r).length === 2;
+}
+
+/**
  * The executable form of the "reject exactly once with the given error,
  * then done forever" contract: asserts exactly one rejection, its identity,
  * and that every later outcome is `{ done: true, value: undefined }`.
@@ -89,11 +102,7 @@ export function expectSingleRejectionThenDone (outcomes, expectedErr) {
   }
   const firstReject = outcomes.findIndex(o => o.rejected);
   for (const o of outcomes.slice(firstReject + 1)) {
-    const r = /** @type {{ done?: boolean, value?: unknown }} */ (o.value);
-    // The key-count check matches the strictness of a deep-equal against
-    // { done: true, value: undefined } — a leaked internal envelope with
-    // extra enumerable keys must fail even when done/value look right.
-    if (o.rejected || r?.done !== true || r?.value !== undefined || Object.keys(r).length !== 2) {
+    if (o.rejected || !isCleanDone(o.value)) {
       throw new Error(`Expected exactly { done: true, value: undefined } after the rejection, saw ${JSON.stringify(o)}`);
     }
   }
