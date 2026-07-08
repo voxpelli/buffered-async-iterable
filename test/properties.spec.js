@@ -32,6 +32,37 @@
  * fires is a silent no-op re-armed, so each property asserts its branches
  * actually triggered (gated on numRuns >= 100 so tiny replay runs don't
  * trip them).
+ *
+ * WHY THIS SUITE EXISTS — an honest ledger, written when it landed
+ * (v2.0.0, 2026), so future maintainers can judge it on its record:
+ *
+ * fast-check found none of the bugs fixed in the 2.0.0 hardening — all
+ * were found first by hand-rolled adversarial probes. The suite's value
+ * is prospective: the post-done over-pull class shipped in 1.x for years
+ * and survived five review waves before an expensive ad-hoc audit caught
+ * it; the differential property below catches that class in 2-10 runs,
+ * forever, for ~25ms per CI pass. The first ITERATION of this file was
+ * itself a liability: mutation testing proved its abort property was
+ * structurally blind to the bug class it was named after (five real bug
+ * classes each survived 20 000 green runs). A weak property test is a
+ * false-confidence machine — it reads as coverage while asserting almost
+ * nothing.
+ *
+ * The lesson that must outlive this comment: MUTATION TESTING, not
+ * property testing, was the high-value activity. It caught the vacuous
+ * first iteration, validated this one (12/12 non-equivalent mutants
+ * killed within 2k runs; zero false positives at 20k runs/property), and
+ * exposed that the fail-fast silent-value-loss class passes the ENTIRE
+ * example suite — making this file its only automated coverage. Policy:
+ * no new property lands here without a mutant that dies by it, and the
+ * next big confidence investment should be mutation testing the example
+ * suite, not growing this file.
+ *
+ * TODO(mutation-testing): evaluate running Stryker
+ * (https://stryker-mutator.io) over the example suite — the 2.0.0 review
+ * proved at least one contract class (fail-fast silent value loss) passes
+ * all 144 example specs undetected, and hand-rolled mutants won't scale
+ * as an ongoing practice.
  */
 
 import fc from 'fast-check';
