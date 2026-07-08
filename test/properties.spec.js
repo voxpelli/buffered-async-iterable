@@ -62,7 +62,8 @@
  * (https://stryker-mutator.io) over the example suite — the 2.0.0 review
  * proved at least one contract class (fail-fast silent value loss) passes
  * all 144 example specs undetected, and hand-rolled mutants won't scale
- * as an ongoing practice.
+ * as an ongoing practice. Tracked with a full plan in
+ * https://github.com/voxpelli/buffered-async-iterable/issues/52
  */
 
 import fc from 'fast-check';
