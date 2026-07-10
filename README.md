@@ -275,7 +275,7 @@ Both `bufferedAsyncMap` and `mergeIterables` return this same iterator shape.
 `npm run bench` runs a [mitata](https://github.com/evanwashere/mitata) suite covering the main design decisions. The findings:
 
 * **There is a per-item buffering tax.** Routing values through `bufferedAsyncMap` costs more than a bare `for await` loop — roughly **20–25×** on synchronous-ish work. The library pays for itself when the callback is genuinely async / IO-bound and benefits from prefetching up to `bufferSize` items in parallel — for trivial synchronous transforms, a plain loop wins.
-* **`bufferSize` is a throughput/overhead trade-off.** Larger buffers keep more work in flight but cost more per pull (the internal `Promise.race` grows with the buffer). The default of `6` is a reasonable midpoint.
+* **`bufferSize` is a throughput/overhead trade-off.** Larger buffers keep more work in flight but, in the default unordered mode, cost more per pull (the internal `Promise.race` grows with the buffer; `ordered: true` races only the head, so its per-pull cost stays flat). The default of `6` is a reasonable midpoint.
 * **The optional machinery is effectively free.** Passing `options.signal`, choosing an `errors` mode, feeding a sync iterable or array instead of an async generator, and using `mergeIterables` instead of a direct call all measure within a few percent of the base case.
 * **Long streams don't accumulate memory.** Retention on unbounded streams is ~0 bytes per item, guarded by `test/memory.spec.js` — see [Advanced semantics](ADVANCED.md#memory-guarantees).
 
