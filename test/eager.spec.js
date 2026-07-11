@@ -261,6 +261,67 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
       cleaned.should.have.members([0, 1, 2, 3, 4, 5]);
     });
 
+    it('returns a non-head lane still holding buffered values on early close (lookahead > 1)', async () => {
+      const stepSpy = sinon.spy();
+      /** @type {number[]} */
+      const cleaned = [];
+
+      // Item 0's slow head keeps item 1 off the delivery head, so item 1 fills
+      // its buffer to lookahead (3) and parks. Closing early must still
+      // .return() that buffered non-head lane — its finally runs exactly once.
+      const iterator = bufferedAsyncMap([0, 1], async function * (item) {
+        try {
+          if (item === 0) {
+            await promisableTimeout(1000);
+            yield 'head';
+            return;
+          }
+          while (true) {
+            stepSpy();
+            yield 'x';
+            await promisableTimeout(1);
+          }
+        } finally {
+          cleaned.push(item);
+        }
+      }, { bufferSize: 6, ordered: 'eager', lookahead: 3 });
+
+      await clock.tickAsync(500);        // item 1 fills to lookahead; head still busy
+      stepSpy.callCount.should.equal(3); // the non-head lane holds K buffered values
+
+      const flow = (async () => {
+        await iterator.return?.();       // close while item 1 holds 3 buffered values
+      })();
+      await clock.runAllAsync();
+      await flow;
+
+      cleaned.should.have.members([0, 1]); // every live lane returned, buffered one included
+    });
+
+    it('delivers an external abort in source order like ordered:true (one rejection, then done)', async () => {
+      const ac = new AbortController();
+      const reason = new Error('eager-abort');
+
+      const iterator = bufferedAsyncMap(
+        yieldValuesOverTime(count, () => 1),
+        async (item) => item,
+        { bufferSize: 6, ordered: 'eager', signal: ac.signal }
+      );
+
+      const first = iterator.next();
+      await clock.runAllAsync();
+      await first; // deliver item 0
+
+      ac.abort(reason);
+
+      // The next pull rejects once with signal.reason (identity preserved, and
+      // ahead of the still-buffered lanes); every later pull resolves done —
+      // observably identical to ordered:true (ADVANCED.md, "Ordered mode").
+      const outcomes = collectNextOutcomes(iterator, 3);
+      await clock.runAllAsync();
+      expectSingleRejectionThenDone(await outcomes, reason);
+    });
+
     it('fail-fast surfaces the source-order-earliest error, not the chronologically-first', async () => {
       const earlyBySource = new Error('item 1 (earliest source order to fail)');
       const earlyByClock = new Error('item 3 (fails first in wall-clock)');
