@@ -119,6 +119,18 @@ a connection pool) for longer — can delay the head's sustained throughput unde
 contention. `lookahead` is only accepted with `ordered: 'eager'` (it throws
 otherwise); for controlling contention, reach for `bufferSize` instead.
 
+**At `lookahead: 1` a spread-cost generator gets nothing from `bufferSize`.** The
+default suits work that happens *before* the first yield; when the cost instead
+falls *between* the yields, each non-head lane runs exactly one value ahead and
+then parks until it reaches the head, so the per-item work after the first yield
+is paid serially at the head and raising `bufferSize` changes nothing — the mode
+performs like `ordered: true`, and the shortfall grows with the `bufferSize` you
+asked for. Treat `bufferSize × lookahead` as a memory budget in values and raise
+`lookahead` deliberately to spend that budget on inter-yield concurrency. That
+budget is a genuine ceiling: for a very-long or unbounded spread-cost generator
+no `lookahead` both bounds memory *and* recovers full concurrency, so where
+out-of-order delivery is acceptable reach for `ordered: false` there instead.
+
 Ordering, abort delivery, and both error modes are observably identical to
 `ordered: true`. In particular a `fail-fast` error surfaces in source order —
 the *source-order-earliest* error wins, not the chronologically-first — and a
