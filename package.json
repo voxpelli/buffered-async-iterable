@@ -40,7 +40,7 @@
     "check:type-coverage": "type-coverage --detail --strict --at-least 95 --ignore-files 'test/*.spec.js'",
     "clean": "run-p clean:*",
     "clean:declarations": "rm -rf $(find . -maxdepth 2 -type f -name '*.d.ts*')",
-    "prepare": "husky",
+    "prepare": "husky && run-s build",
     "prepublishOnly": "run-s build",
     "test": "run-s check test:*",
     "test:mocha": "c8 --reporter=lcov --reporter text mocha 'test/**/*.spec.js'",
