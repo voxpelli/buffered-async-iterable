@@ -64,18 +64,24 @@ A consumer matching on a non-`Error` sentinel should check `.cause`.
 
 ## Ordered mode
 
-`ordered: true` changes *delivery* order, not *dispatch*: callbacks still run
-concurrently up to `bufferSize`, and each result is delivered once every
-earlier item's result has been delivered. A slow first item therefore
-head-of-line blocks the *results*, not the *work* — the timing spec in
-`test/values.spec.js` pins that a full ordered run completes in roughly the
-longest item's time plus the tail, not the serial sum.
+`ordered: true` changes *delivery* order, not *dispatch* — **for plain-value
+callbacks.** Their callbacks still run concurrently up to `bufferSize`, and
+each result is delivered once every earlier item's result has been delivered,
+so a slow first item head-of-line blocks the *results*, not the *work* (the
+timing spec in `test/values.spec.js` pins that a full ordered run of
+plain-value callbacks completes in roughly the longest item's time plus the
+tail, not the serial sum).
 
-Values from an async-generator callback are delivered contiguously and in
-source order: everything item N's generator yields comes before anything from
-item N+1 (pinned by the nested-ordered spec in `test/values.spec.js`; in
-ordered mode the buffer always feeds from the current sub-iterator rather
-than load-balancing).
+**Async-generator callbacks are the exception.** In ordered mode the buffer
+always feeds from the current sub-iterator rather than load-balancing, so a
+generator callback runs strictly one at a time — `bufferSize` buffers the
+undispatched generators but does not step them concurrently, and a slow first
+item blocks the *work*, not just the results (the serial timing is pinned by
+the nested-ordered spec in `test/values.spec.js`). Values are still delivered
+contiguously and in source order: everything item N's generator yields comes
+before anything from item N+1. If you need concurrent execution *and*
+source-order delivery, return a value (such as an array) from the callback
+rather than yielding from a generator.
 
 Abort delivery and both error modes behave identically in ordered and
 unordered mode (pinned by `test/abort.spec.js` and

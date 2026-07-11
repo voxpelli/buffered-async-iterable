@@ -1094,6 +1094,45 @@ describe('bufferedAsyncMap() values', () => {
       duration.should.equal(10004);
     });
 
+    it('should run async-generator callbacks serially in ordered mode (bufferSize adds no concurrency)', async () => {
+      const source = yieldValuesOverTime(count, () => 1);
+
+      let inFlight = 0;
+      let maxInFlight = 0;
+
+      // The callback body runs only when its sub-iterator is stepped — and in
+      // ordered mode the buffer always feeds from subIterators[0], so exactly
+      // one generator body is ever live. bufferSize buffers the undispatched
+      // generator objects (callback() returns the generator without running
+      // its body) but does not step them concurrently. Contrast the unordered
+      // path, where the same fixture reaches bufferSize.
+      const promisedResult = (async () => {
+        /** @type {number[]} */
+        const rawResult = [];
+
+        for await (const value of bufferedAsyncMap(source, async function * (item) {
+          inFlight++;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          await promisableTimeout(50);
+          yield item;
+          inFlight--;
+        }, { bufferSize: 6, ordered: true })) {
+          rawResult.push(value);
+        }
+
+        return rawResult;
+      })();
+
+      await clock.runAllAsync();
+
+      const rawResult = await promisedResult;
+
+      // Delivery is in source order...
+      rawResult.should.deep.equal([0, 1, 2, 3, 4, 5]);
+      // ...and only one generator body is ever in flight at a time.
+      maxInFlight.should.equal(1);
+    });
+
     it('should handle nested async generator values out of order when looped over', async () => {
       // Create the promise first, then have it be fully executed using clock.runAllAsync()
       const promisedResult = (async () => {
