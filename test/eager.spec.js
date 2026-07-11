@@ -9,33 +9,41 @@ import {
   collectNextOutcomes,
   expectSingleRejectionThenDone,
   promisableTimeout,
+  stubAsyncIterator,
   unwrapCapturedError,
   yieldValuesOverTime,
 } from './utils.js';
 
 chai.should();
 
+/**
+ * The delivered (non-rejected, non-done) values from a collectNextOutcomes run.
+ *
+ * @param {Array<{ rejected: boolean, value: unknown }>} outcomes
+ * @returns {unknown[]}
+ */
+const deliveredValues = (outcomes) => outcomes
+  .filter(o => !o.rejected)
+  .map(o => /** @type {{ value: unknown }} */ (o.value).value)
+  .filter(v => v !== undefined);
+
 // ─────────────────────────────────────────────────────────────────────────
-// DESIGN SPIKE. `ordered: 'eager'` is scaffolded but not implemented (see
-// DESIGN-eager-mode.md). The first block pins the *current* behaviour — the
-// mode throws, and the option validates — so the spike's contract is real and
-// tested. The second block (skipped) pins the *intended* behaviour for the
-// follow-up implementation PR to un-skip and satisfy.
+// `ordered: 'eager'` — concurrent callback dispatch with in-order delivery
+// (see DESIGN-eager-mode.md). The first block covers option handling; the
+// second exercises the delivery/concurrency/backpressure/abort/error contract.
 // ─────────────────────────────────────────────────────────────────────────
 
 describe("bufferedAsyncMap() ordered: 'eager'", () => {
-  describe('scaffold (not yet implemented)', () => {
-    it("throws a clear not-implemented error at construction for ordered: 'eager'", () => {
-      (() => bufferedAsyncMap([1, 2, 3], async (item) => item, { ordered: 'eager' }))
-        .should.throw("ordered: 'eager' is not yet implemented");
+  describe('option handling', () => {
+    it("accepts ordered: 'eager' at construction", () => {
+      (() => bufferedAsyncMap([1, 2, 3], async (item) => item, { ordered: 'eager' })).should.not.throw();
     });
 
-    it("throws not-implemented for mergeIterables with ordered: 'eager'", () => {
-      (() => mergeIterables([yieldValuesOverTime(3, () => 1)], { ordered: 'eager' }))
-        .should.throw("ordered: 'eager' is not yet implemented");
+    it("accepts ordered: 'eager' for mergeIterables", () => {
+      (() => mergeIterables([[1, 2, 3]], { ordered: 'eager' })).should.not.throw();
     });
 
-    it('validates the ordered option — rejects a non-boolean, non-"eager" value', () => {
+    it('rejects a non-boolean, non-"eager" ordered value', () => {
       (() => bufferedAsyncMap([1, 2, 3], async (item) => item, { ordered: /** @type {*} */ ('nope') }))
         .should.throw(TypeError, "Expected ordered to be a boolean or 'eager'");
     });
@@ -46,7 +54,7 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
     });
   });
 
-  describe.skip('intended behaviour (pending implementation)', () => {
+  describe('behaviour', () => {
     const count = 6;
 
     /** @type {import('sinon').SinonFakeTimers} */
@@ -248,6 +256,119 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
       // Captured in source order (item 1 before item 3), regardless of timing.
       aggregate.errors.should.deep.equal([errA, errB]);
       unwrapCapturedError(aggregate).should.equal(errA);
+    });
+  });
+
+  describe('error & malformed-result handling', () => {
+    /** @type {import('sinon').SinonFakeTimers} */
+    let clock;
+
+    beforeEach(() => {
+      clock = sinon.useFakeTimers();
+    });
+
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it("delivers a generator's buffered values first, then surfaces its mid-stream error", async () => {
+      const boom = new Error('mid-stream');
+
+      const iterator = bufferedAsyncMap([0, 1], async function * (item) {
+        if (item === 0) {
+          yield 'a';
+          yield 'b';
+          throw boom; // rejects a later .next() on this sub-iterator
+        }
+        yield 'c';
+      }, { bufferSize: 6, ordered: 'eager' });
+
+      const flow = collectNextOutcomes(iterator, 6);
+      await clock.runAllAsync();
+      const outcomes = await flow;
+
+      // item 0's yields in source order, then item 1's, then the drained error.
+      deliveredValues(outcomes).should.deep.equal(['a', 'b', 'c']);
+      const rejection = outcomes.find(o => o.rejected);
+      unwrapCapturedError(rejection?.value).should.equal(boom);
+    });
+
+    it('surfaces a malformed async-iterable returned by the callback as a stream error', async () => {
+      const iterator = bufferedAsyncMap([0], () => /** @type {*} */ ({
+        [Symbol.asyncIterator]: () => 42, // method returns a non-object
+      }), { bufferSize: 6, ordered: 'eager' });
+
+      const flow = collectNextOutcomes(iterator, 2);
+      await clock.runAllAsync();
+      const outcomes = await flow;
+
+      outcomes.some(o => o.rejected).should.equal(true);
+      const rejection = outcomes.find(o => o.rejected);
+      (unwrapCapturedError(rejection?.value) instanceof TypeError).should.equal(true);
+    });
+
+    it('surfaces a malformed sub-iterator result and still .return()s the iterator on cleanup', async () => {
+      const returnSpy = sinon.spy();
+
+      const iterator = bufferedAsyncMap([0], () => /** @type {*} */ ({
+        [Symbol.asyncIterator]: () => ({
+          next: async () => 42, // non-object result
+          'return': returnSpy,
+        }),
+      }), { bufferSize: 6, ordered: 'eager' });
+
+      const flow = collectNextOutcomes(iterator, 2);
+      await clock.runAllAsync();
+      const outcomes = await flow;
+
+      outcomes.some(o => o.rejected).should.equal(true);
+      returnSpy.callCount.should.equal(1); // malformed sub-iterators are still returned
+    });
+
+    it('surfaces a hostile getter on a sub-iterator result as a stream error', async () => {
+      const iterator = bufferedAsyncMap([0], () => /** @type {*} */ ({
+        [Symbol.asyncIterator]: () => ({
+          next: async () => ({ get done () { throw new Error('hostile'); } }),
+        }),
+      }), { bufferSize: 6, ordered: 'eager' });
+
+      const flow = collectNextOutcomes(iterator, 2);
+      await clock.runAllAsync();
+      const outcomes = await flow;
+
+      outcomes.some(o => o.rejected).should.equal(true);
+    });
+
+    it('surfaces a source next() rejection through the error mode', async () => {
+      const boom = new Error('source boom');
+      const { asyncIterable, asyncIterator } = stubAsyncIterator();
+      asyncIterator.next.rejects(boom);
+      asyncIterator.return.resolves({ done: true, value: undefined });
+
+      const iterator = bufferedAsyncMap(asyncIterable, async (x) => x, { bufferSize: 1, ordered: 'eager' });
+
+      const flow = collectNextOutcomes(iterator, 2);
+      await clock.runAllAsync();
+      const outcomes = await flow;
+
+      outcomes.some(o => o.rejected).should.equal(true);
+      const rejection = outcomes.find(o => o.rejected);
+      unwrapCapturedError(rejection?.value).should.equal(boom);
+    });
+
+    it('surfaces a malformed source result and .return()s the source on cleanup', async () => {
+      const { asyncIterable, asyncIterator } = stubAsyncIterator();
+      asyncIterator.next.resolves(42); // non-object result
+      asyncIterator.return.resolves({ done: true, value: undefined });
+
+      const iterator = bufferedAsyncMap(asyncIterable, async (x) => x, { bufferSize: 1, ordered: 'eager' });
+
+      const flow = collectNextOutcomes(iterator, 2);
+      await clock.runAllAsync();
+      const outcomes = await flow;
+
+      outcomes.some(o => o.rejected).should.equal(true);
+      asyncIterator.return.callCount.should.equal(1);
     });
   });
 });

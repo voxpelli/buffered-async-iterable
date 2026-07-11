@@ -25,6 +25,15 @@ group('nested sub-iterators (async-generator callback)', () => {
       bench(`fan-out callback • ${count} × 4`, async () => {
         doNotOptimize(await drain(bufferedAsyncMap(asyncRange(count), fanOut)));
       }).gc('inner');
+      // ordered: true serialises generator dispatch; ordered: 'eager' dispatches
+      // concurrently with in-order delivery. Timerless fixtures can't show the
+      // latency win, so these track eager's per-item bookkeeping overhead only.
+      bench(`fan-out callback ordered • ${count} × 4`, async () => {
+        doNotOptimize(await drain(bufferedAsyncMap(asyncRange(count), fanOut, { ordered: true })));
+      }).gc('inner');
+      bench(`fan-out callback eager • ${count} × 4`, async () => {
+        doNotOptimize(await drain(bufferedAsyncMap(asyncRange(count), fanOut, { ordered: 'eager' })));
+      }).gc('inner');
     });
   }
 });

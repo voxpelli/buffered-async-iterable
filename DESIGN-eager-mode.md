@@ -1,12 +1,12 @@
 # Design: `ordered: 'eager'` — out-of-order callbacks, in-order yields
 
-> **Status: design spike.** This document + the typed skeleton in `index.js`
-> (the `mode` plumbing, the `Lane` typedef, and the `admitLanes` / `pumpLane` /
-> `nextValueEager` stubs) are up for design review. The mode is **not yet
-> implemented** — passing `ordered: 'eager'` currently throws
-> `ordered: 'eager' is not yet implemented`. The behaviour below is pinned by
-> the (skipped) specs in `test/eager.spec.js`; un-skipping them and filling in
-> the helper bodies is the follow-up implementation PR.
+> **Status: implemented.** The mode is live in `index.js` (the `mode` plumbing,
+> the `Lane` typedef, and the `classifyStep` / `admitOneLane` / `admitLanes` /
+> `pumpLane` / `nextValueEager` helpers) and pinned by `test/eager.spec.js`
+> (option handling, concurrency, in-order delivery, bounded look-ahead, cleanup,
+> both error modes, and malformed-result handling) plus an eager retention case
+> in `test/memory.spec.js`. This document is the design rationale behind that
+> implementation.
 
 ## Motivation
 
@@ -58,7 +58,7 @@ Normalized once at construction into a closure-scoped `mode`:
 const mode = ordered === 'eager' ? 'eager' : (ordered ? 'ordered' : 'unordered');
 ```
 
-`ordered` is currently unvalidated (only defaulted); the spike adds a
+`ordered` was previously unvalidated (only defaulted); the implementation adds a
 `TypeError` for anything that is not a boolean or `'eager'`. Because `'eager'` is
 truthy, every existing `ordered`-as-boolean site is rewritten to an explicit
 `mode === 'ordered'` check (`index.js` dispatch/race sites) so the string can
@@ -175,40 +175,28 @@ mode already handles — so the abort/cleanup machinery generalizes:
   in-flight lanes keep running until then) — exactly ordered mode's behaviour,
   and the price of identical observable order.
 
-## Drafted `ADVANCED.md` "eager" contract (to fold in when the feature ships)
+The user-facing contract lives in [`ADVANCED.md`](ADVANCED.md#ordered-mode)
+under "Ordered mode".
 
-> ### `ordered: 'eager'` — concurrent dispatch, in-order delivery
->
-> `ordered: 'eager'` delivers in strict source order like `ordered: true`, but
-> dispatches callbacks — **including async-generator callbacks** —
-> concurrently up to `bufferSize`. It is the mode to reach for when you need
-> deterministic output *and* fan-out concurrency (e.g. a generator callback
-> whose expensive work happens before its first `yield`).
->
-> Concurrency is bounded twice: at most `bufferSize` source items are in flight,
-> and each not-yet-at-head item is stepped at most once ahead of delivery (a
-> fixed look-ahead of 1). A non-head generator — even an unbounded one — is
-> therefore stepped once to its first value and then paused until it reaches the
-> delivery head, so total buffering stays bounded regardless of generator length.
->
-> Ordering, abort delivery, and both error modes are observably identical to
-> `ordered: true` — in particular, a `fail-fast` error surfaces in source order
-> (the source-order-earliest error wins, not the chronologically-first). Lane
-> ordering relies on the source answering `.next()` in FIFO order; a hand-rolled
-> iterator that does not should use `bufferSize: 1` or be wrapped in an async
-> generator (the same caveat as the prefetch model).
+## An implementation subtlety worth remembering
 
-## Follow-up implementation PR (not in this spike)
+`admitOneLane`'s pending promise wraps *both* the source pull and the callback
+dispatch (which includes an `await callbackResult`). `lane.pending` must stay
+set for that whole span and be cleared only once the lane reaches its
+post-dispatch state — **not** at the top of the handler. A parked
+`nextValueEager` races the head lane's `pending`; if `pending` were cleared
+during the `await`, the head would have `dispatched: false` and no in-flight
+event, the park would race an instantly-resolving `undefined`, and the consumer
+would busy-loop (an early implementation OOMed exactly this way on a fast array
+source). `pumpLane`'s handler is synchronous after its step resolves, so it can
+clear `pending` at the top without the same hazard.
 
-1. Fill in `admitLanes` / `pumpLane` / `nextValueEager`; un-skip
-   `test/eager.spec.js`.
-2. Extend `doCleanup` with the lane-iterator returns + `pendingCloses` dedupe.
-3. Benchmarks: eager rows in `benchmark/nested.js` and `benchmark/throughput.js`
-   (timerless fixtures measure bookkeeping overhead only; the speedup is proven
-   by the fake-timer duration asserts in the specs, not the benches).
-4. Optionally factor the shared result-classification ladder (the
-   `isSpecObject` → brand-verified `ERR` → `done`/`value` sequence) into one
-   helper reused by the new eager consumer — orthogonal to the two envelope
-   *factories*, which stay split.
-5. Move the drafted contract above into `ADVANCED.md` and drop the "not yet
-   implemented" guard.
+## Possible follow-ups (not required)
+
+- **Benchmarks**: eager rows in `benchmark/nested.js` / `benchmark/throughput.js`.
+  Timerless fixtures measure bookkeeping overhead only (eager ≈ ordered, plus
+  the lane objects); the *speedup* is proven by the fake-timer duration asserts
+  in `test/eager.spec.js`, not the benches.
+- **`lookahead?: number`**: expose `K` (currently the fixed `LANE_LOOKAHEAD = 1`
+  module constant) if a workload with expensive *between-yield* work appears. The
+  `Lane` typedef and `pumpLane` already parameterize on it.

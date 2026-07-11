@@ -80,12 +80,44 @@ item blocks the *work*, not just the results (the serial timing is pinned by
 the nested-ordered spec in `test/values.spec.js`). Values are still delivered
 contiguously and in source order: everything item N's generator yields comes
 before anything from item N+1. If you need concurrent execution *and*
-source-order delivery, return a value (such as an array) from the callback
-rather than yielding from a generator.
+source-order delivery, use `ordered: 'eager'` (below), or return a value (such
+as an array) from the callback rather than yielding from a generator.
 
 Abort delivery and both error modes behave identically in ordered and
 unordered mode (pinned by `test/abort.spec.js` and
 `test/errors-fail-fast.spec.js`).
+
+### `ordered: 'eager'` — concurrent dispatch, in-order delivery
+
+`ordered: 'eager'` delivers in strict source order like `ordered: true`, but
+dispatches callbacks — **including async-generator callbacks** — concurrently
+up to `bufferSize`. It is the mode to reach for when you need deterministic
+output *and* fan-out concurrency (e.g. a generator callback whose expensive
+work happens before its first `yield`). `test/eager.spec.js` pins that a
+generator workload reaches `bufferSize` concurrent callback bodies here while
+`ordered: true` stays serial, and that both deliver the identical ordered
+sequence.
+
+Concurrency is bounded twice: at most `bufferSize` source items are in flight,
+and each not-yet-at-head item is stepped at most once ahead of delivery (a
+fixed look-ahead of one value). A non-head generator — even an unbounded one —
+is therefore stepped once to its first value and then paused until it reaches
+the delivery head, so total buffering stays bounded regardless of generator
+length. Values are streamed one at a time as the head lane produces them; the
+mode never buffers a whole generator's output.
+
+Ordering, abort delivery, and both error modes are observably identical to
+`ordered: true`. In particular a `fail-fast` error surfaces in source order —
+the *source-order-earliest* error wins, not the chronologically-first — and a
+generator's already-buffered values are delivered before its own later error.
+Lane ordering relies on the source answering `.next()` in FIFO order; a
+hand-rolled iterator that does not should use `bufferSize: 1` or be wrapped in
+an async generator (the same caveat as the prefetch model above).
+
+The trade-off versus unordered `fail-fast`: because delivery is head-first,
+eager cannot short-circuit the pipeline before the earliest error reaches the
+head, so later in-flight lanes keep running until then. That is the cost of
+identical observable order, and it matches `ordered: true`.
 
 ## Cancellation in depth
 
