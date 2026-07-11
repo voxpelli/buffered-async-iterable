@@ -102,7 +102,7 @@ async function * yieldIterable (item) {
  *
  * @template T
  * @param {Array<AsyncIterable<T> | (Iterable<T> & object) | T[]>} input array of (async) iterables to merge — validated eagerly, string elements rejected
- * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined }} [options] same options as `bufferedAsyncMap`; `ordered: true` drains the inputs in array order
+ * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined, ordered?: boolean|'eager'|undefined, signal?: AbortSignal|undefined }} [options] same options as `bufferedAsyncMap`; `ordered: true` drains the inputs in array order (`ordered: 'eager'` is reserved for the concurrent-dispatch mode — see DESIGN-eager-mode.md — and is not yet implemented)
  * @returns {BufferedAsyncIterableIterator<T>} async iterator with guaranteed `return()`, `throw()` and `[Symbol.asyncDispose]()`
  */
 export function mergeIterables (input, options) {
@@ -168,7 +168,7 @@ export function mergeIterables (input, options) {
  * @template R
  * @param {AsyncIterable<T> | (Iterable<T> & object) | T[]} input async iterable, sync iterable or array (strings rejected — spread first if chars are intended)
  * @param {(item: T, opts: { signal: AbortSignal }) => (Promise<R>|AsyncIterable<R>)} callback async function, or async generator whose values merge into the stream; `signal` is always present
- * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, ordered?: boolean|undefined, signal?: AbortSignal|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined }} [options] `bufferSize` (concurrency, default 6), `cleanupTimeout` (ms cap on close-time source cleanup, default unbounded), `ordered` (source-order delivery, default false), `signal` (external abort), `errors` (default 'fail-eventually')
+ * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, ordered?: boolean|'eager'|undefined, signal?: AbortSignal|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined }} [options] `bufferSize` (concurrency, default 6), `cleanupTimeout` (ms cap on close-time source cleanup, default unbounded), `ordered` (source-order delivery, default false; `'eager'` reserved for concurrent dispatch with in-order delivery — see DESIGN-eager-mode.md — not yet implemented), `signal` (external abort), `errors` (default 'fail-eventually')
  * @returns {BufferedAsyncIterableIterator<R>} async iterator with guaranteed `return()`, `throw()` and `[Symbol.asyncDispose]()`
  */
 export function bufferedAsyncMap (input, callback, options) {
@@ -177,6 +177,26 @@ export function bufferedAsyncMap (input, callback, options) {
   // value shape never carries them — see the factories); the two factories'
   // second positional booleans mean DIFFERENT things (isSubIterator vs
   // fromSubIterator), hence the inline arg comments at every call site.
+
+  // DESIGN SPIKE (not yet implemented — see DESIGN-eager-mode.md). The `Lane`
+  // shape backs `ordered: 'eager'`: one lane per in-flight source item, in
+  // source order, with a private K-bounded buffer so non-head generators
+  // dispatch concurrently without unbounded buffering. Declared here (typed)
+  // so the design is reviewable and the follow-up implementation has the
+  // contract to fill in; the helpers below currently throw.
+  /**
+   * @template R
+   * @typedef {{
+   *   iterator: AsyncIterator<R, void, void> | undefined,
+   *   buffer: R[],
+   *   pending: BufferPromise | undefined,
+   *   dispatched: boolean,
+   *   done: boolean,
+   *   terminalErr: Error | undefined,
+   *   phantom: boolean,
+   * }} Lane
+   */
+
   const {
     bufferSize = 6,
     cleanupTimeout,
@@ -221,6 +241,17 @@ export function bufferedAsyncMap (input, callback, options) {
   }
   if (externalSignal !== undefined && !(externalSignal instanceof AbortSignal)) throw new TypeError('Expected signal to be an AbortSignal');
   if (errorsMode !== 'fail-eventually' && errorsMode !== 'fail-fast') throw new TypeError("Expected errors to be 'fail-eventually' or 'fail-fast'");
+  // `ordered` was historically boolean-only and unvalidated (just defaulted).
+  // The `'eager'` value opts into concurrent dispatch with in-order delivery
+  // (see DESIGN-eager-mode.md); anything else that isn't a boolean is rejected
+  // so a typo can't silently pick a mode.
+  if (typeof ordered !== 'boolean' && ordered !== 'eager') throw new TypeError("Expected ordered to be a boolean or 'eager'");
+
+  // Single normalization of the three delivery modes. Every dispatch/race site
+  // branches on `mode`, never on `ordered`'s truthiness — `'eager'` is truthy,
+  // so a bare `if (ordered)` would misroute eager through the ordered path.
+  /** @type {'unordered' | 'ordered' | 'eager'} */
+  const mode = ordered === 'eager' ? 'eager' : (ordered ? 'ordered' : 'unordered');
 
   // Invocation happens only after every validation above has passed — the
   // captured method (never a re-read of the input) is what gets called. The
@@ -539,8 +570,8 @@ export function bufferedAsyncMap (input, callback, options) {
     /** @type {AsyncIterator<R, void, void>|undefined} */
     let currentSubIterator;
 
-    if (ordered || subIterators.length === 0) {
-      currentSubIterator = ordered ? subIterators[0] : undefined;
+    if (mode === 'ordered' || subIterators.length === 0) {
+      currentSubIterator = mode === 'ordered' ? subIterators[0] : undefined;
     } else {
       const iterator = findLeastTargeted(
         mainReturnedDone ? subIterators : [...subIterators, asyncIterator],
@@ -704,7 +735,7 @@ export function bufferedAsyncMap (input, callback, options) {
 
     promisesToSourceIteratorMap.set(bufferPromise, currentSubIterator || asyncIterator);
 
-    if (ordered && currentSubIterator) {
+    if (mode === 'ordered' && currentSubIterator) {
       // Insert after any buffer slots already produced by this sub-iterator so
       // its values stay contiguous and in order. In practice consumption is
       // 1-to-1 with production in ordered mode, so the buffer never holds a
@@ -862,7 +893,7 @@ export function bufferedAsyncMap (input, callback, options) {
     });
 
     const raced = await Promise.race(
-      ordered
+      mode === 'ordered'
         ? [nextBufferedPromise, parkPromise]
         : [...bufferedPromises, parkPromise]
     );
@@ -954,6 +985,61 @@ export function bufferedAsyncMap (input, callback, options) {
     }
   };
 
+  // ─── ordered: 'eager' — DESIGN SPIKE, not yet implemented ────────────────
+  // Concurrent dispatch with in-order delivery (see DESIGN-eager-mode.md). The
+  // lane structures and the three helper *shapes* are in place so the design
+  // is reviewable and the follow-up PR has a contract to fill in; every eager
+  // path throws before any lane work, and construction fails fast (below). The
+  // existing ordered/unordered hot paths are untouched — eager is fully
+  // isolated in these helpers, gated by a single `mode === 'eager'` check.
+  const NOT_IMPLEMENTED_EAGER = "ordered: 'eager' is not yet implemented";
+
+  /** @type {Lane<R>[]} */
+  const lanes = [];
+
+  /**
+   * Background drainer: steps a not-yet-head lane up to K (=1) buffered values
+   * then parks it — this is where concurrent generator dispatch will live.
+   *
+   * @param {Lane<R>} lane
+   * @returns {void}
+   */
+  const pumpLane = (lane) => {
+    /* c8 ignore start -- eager scaffolding: deferred, not exercised until implemented */
+    // Real stepping is deferred; this guard documents the precondition the
+    // implementation will assume (and keeps `lane` referenced).
+    if (lane.done || lane.terminalErr) return;
+    throw new Error(NOT_IMPLEMENTED_EAGER);
+    /* c8 ignore stop */
+  };
+
+  /**
+   * Producer: admits placeholder lanes up to bufferSize, preserving source
+   * order via the FIFO of the source's own `.next()` calls.
+   *
+   * @returns {void}
+   */
+  const admitLanes = () => {
+    throw new Error(NOT_IMPLEMENTED_EAGER);
+  };
+
+  /**
+   * Consumer: delivers lanes[0]'s buffered values in strict source order, only
+   * ever waiting on the head lane while the rest drain in the background.
+   *
+   * @returns {Promise<IteratorResult<R>>}
+   */
+  const nextValueEager = async () => {
+    /* c8 ignore start -- eager scaffolding: deferred, not exercised until implemented */
+    // Skeleton control flow — references the lane structures so their intended
+    // shape stays visible and the symbols stay live; real work is deferred.
+    if (lanes.length === 0) admitLanes();
+    const head = lanes[0];
+    if (head) pumpLane(head);
+    throw new Error(NOT_IMPLEMENTED_EAGER);
+    /* c8 ignore stop */
+  };
+
   /** @type {Promise<IteratorResult<R>>} */
   let currentStep;
 
@@ -963,9 +1049,10 @@ export function bufferedAsyncMap (input, callback, options) {
       // Chain via then(nextValue, nextValue) so a rejection on one .next() does
       // not poison every subsequent call — the next call still reaches
       // nextValue() which observes the post-rejection state machine.
+      const stepFn = mode === 'eager' ? nextValueEager : nextValue;
       currentStep = currentStep
-        ? currentStep.then(nextValue, nextValue)
-        : nextValue();
+        ? currentStep.then(stepFn, stepFn)
+        : stepFn();
       return currentStep;
     },
     // return() deliberately bypasses the currentStep chain: it calls
@@ -1018,7 +1105,14 @@ export function bufferedAsyncMap (input, callback, options) {
     },
   };
 
-  fillQueue();
+  // Eager prefetch (admitLanes) will start here once implemented; for now the
+  // stub throws, so `ordered: 'eager'` fails fast at construction rather than
+  // silently mis-dispatching. The other two modes take the unchanged path.
+  if (mode === 'eager') {
+    admitLanes();
+  } else {
+    fillQueue();
+  }
 
   return resultAsyncIterableIterator;
 }
