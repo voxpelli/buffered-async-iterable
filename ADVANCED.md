@@ -99,12 +99,25 @@ generator workload reaches `bufferSize` concurrent callback bodies here while
 sequence.
 
 Concurrency is bounded twice: at most `bufferSize` source items are in flight,
-and each not-yet-at-head item is stepped at most once ahead of delivery (a
-fixed look-ahead of one value). A non-head generator — even an unbounded one —
-is therefore stepped once to its first value and then paused until it reaches
-the delivery head, so total buffering stays bounded regardless of generator
-length. Values are streamed one at a time as the head lane produces them; the
-mode never buffers a whole generator's output.
+and each not-yet-at-head item may buffer at most `lookahead` values ahead of
+delivery (the `lookahead` option, default 1). A non-head generator — even an
+unbounded one — is therefore stepped up to `lookahead` times and then paused
+until it reaches the delivery head, so total buffering stays bounded at
+`bufferSize × lookahead` regardless of generator length. Values are streamed one
+at a time as the head lane produces them; the mode never buffers a whole
+generator's output.
+
+**`lookahead` trades memory *and* critical-path priority, not the head's own
+concurrency.** Buffers and step-slots are per-lane and independent, so the head
+is never starved — raising `lookahead` only lets *non-head* lanes run further
+ahead speculatively. The default of 1 captures the win for the common shape,
+where the expensive work is before the first yield. A larger value helps a deep
+per-item pipeline (e.g. paginated fetches whose cost is spread across yields),
+but it costs memory, wastes more speculative work if the consumer stops early,
+and — because a non-head lane then holds shared external resources (a threadpool,
+a connection pool) for longer — can delay the head's sustained throughput under
+contention. `lookahead` is only accepted with `ordered: 'eager'` (it throws
+otherwise); for controlling contention, reach for `bufferSize` instead.
 
 Ordering, abort delivery, and both error modes are observably identical to
 `ordered: true`. In particular a `fail-fast` error surfaces in source order —

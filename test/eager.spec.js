@@ -27,6 +27,38 @@ const deliveredValues = (outcomes) => outcomes
   .map(o => /** @type {{ value: unknown }} */ (o.value).value)
   .filter(v => v !== undefined);
 
+/**
+ * Builds an eager iterator over [0, 1] where item 0's generator is slow (keeps
+ * the head occupied) and item 1's is unbounded, counting its steps. The callback
+ * is an async generator *function* so both items actually fan out (an async arrow
+ * returning a generator would be delivered as a plain value and never stepped).
+ *
+ * @param {import('sinon').SinonSpy} stepSpy
+ * @param {number} [lookahead]
+ * @returns {import('../index.js').BufferedAsyncIterableIterator<string>}
+ */
+function unboundedNonHeadIterator (stepSpy, lookahead) {
+  /**
+   * @param {number} item
+   * @returns {AsyncGenerator<string>}
+   */
+  async function * callback (item) {
+    if (item === 0) {
+      await promisableTimeout(1000);
+      yield 'head';
+      return;
+    }
+    // Non-head lane: unbounded — bounded to `lookahead` steps while not head.
+    while (true) {
+      stepSpy();
+      yield 'x';
+      await promisableTimeout(1);
+    }
+  }
+
+  return bufferedAsyncMap([0, 1], callback, { bufferSize: 6, ordered: 'eager', ...(lookahead === undefined ? {} : { lookahead }) });
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // `ordered: 'eager'` — concurrent callback dispatch with in-order delivery
 // (see DESIGN-eager-mode.md). The first block covers option handling; the
@@ -51,6 +83,24 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
     it('still accepts the existing boolean ordered values', () => {
       (() => bufferedAsyncMap([1, 2, 3], async (item) => item, { ordered: true })).should.not.throw();
       (() => bufferedAsyncMap([1, 2, 3], async (item) => item, { ordered: false })).should.not.throw();
+    });
+
+    it('accepts a positive-integer lookahead with ordered: \'eager\'', () => {
+      (() => bufferedAsyncMap([1, 2, 3], async (item) => item, { ordered: 'eager', lookahead: 3 })).should.not.throw();
+    });
+
+    it('rejects a non-positive-integer lookahead', () => {
+      for (const bad of [0, -1, 1.5, /** @type {*} */ ('x')]) {
+        (() => bufferedAsyncMap([1, 2, 3], async (item) => item, { ordered: 'eager', lookahead: bad }))
+          .should.throw(TypeError, 'Expected lookahead to be a positive integer');
+      }
+    });
+
+    it("rejects lookahead unless ordered is 'eager'", () => {
+      (() => bufferedAsyncMap([1, 2, 3], async (item) => item, { ordered: true, lookahead: 2 }))
+        .should.throw(TypeError, "Expected lookahead to be used only with ordered: 'eager'");
+      (() => bufferedAsyncMap([1, 2, 3], async (item) => item, { ordered: false, lookahead: 2 }))
+        .should.throw(TypeError, "Expected lookahead to be used only with ordered: 'eager'");
     });
   });
 
@@ -151,25 +201,9 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
       eagerDuration.should.be.lessThan(orderedDuration); // eager overlaps the pre-yield work
     });
 
-    it('bounds look-ahead: an unbounded non-head generator is stepped at most K (=1) times ahead of the head', async () => {
+    it('bounds look-ahead: an unbounded non-head generator is stepped at most once ahead (default lookahead 1)', async () => {
       const stepSpy = sinon.spy();
-
-      /** @returns {AsyncGenerator<string>} */
-      async function * unbounded () {
-        while (true) {
-          stepSpy();
-          yield 'x';
-          await promisableTimeout(1);
-        }
-      }
-
-      const iterator = bufferedAsyncMap([0, 1], async (item) => (
-        item === 0
-          // Head lane: slow, keeps the head occupied.
-          ? (async function * () { await promisableTimeout(1000); yield 'head'; }())
-          // Non-head lane: unbounded — stepped at most K times while not head.
-          : unbounded()
-      ), { bufferSize: 6, ordered: 'eager' });
+      const iterator = unboundedNonHeadIterator(stepSpy);
 
       const flow = (async () => {
         await iterator.next();
@@ -177,7 +211,25 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
 
       // Advance, but not enough for the head to finish.
       await clock.tickAsync(500);
-      stepSpy.callCount.should.be.at.most(1);
+      stepSpy.callCount.should.equal(1);
+
+      await clock.runAllAsync();
+      await flow;
+      await iterator.return?.();
+    });
+
+    it('respects a custom lookahead: a non-head generator buffers exactly lookahead values ahead', async () => {
+      const stepSpy = sinon.spy();
+      const iterator = unboundedNonHeadIterator(stepSpy, 3);
+
+      const flow = (async () => {
+        await iterator.next();
+      })();
+
+      // While the head is still occupied, the non-head lane fills to lookahead
+      // (3) and then parks — proving the knob raises the bound but stays bounded.
+      await clock.tickAsync(500);
+      stepSpy.callCount.should.equal(3);
 
       await clock.runAllAsync();
       await flow;

@@ -146,12 +146,26 @@ pause/resume is automatic. At most `bufferSize` lanes exist, each holding
 non-head generator is.** An infinite non-head generator is stepped exactly `K`
 times, then blocked until it becomes head.
 
-**K = 1 is fixed for v1** (a module constant). The expensive fan-out cost is
-before the first yield, so `K = 1` captures essentially the whole win;
-delivery (one value at a time) cannot exploit deeper per-lane pipelining for the
-head, and `K > 1` only inflates memory for non-head lanes. A future
-`lookahead?: number` option can expose it if a real need appears — the typedef
-and `pumpLane` already parameterize on `K`.
+**`K` is the `lookahead` option** (positive integer, default 1 —
+`DEFAULT_LANE_LOOKAHEAD`; eager-only, throws with any other mode). The expensive
+fan-out cost is usually before the first yield, so the default of 1 captures
+essentially the whole win and keeps buffering minimal; delivery (one value at a
+time) cannot exploit deeper pipelining for the *head*, so a larger value only
+helps *non-head* lanes on a deep per-item pipeline (e.g. paginated fetches whose
+cost is spread across yields), at the price of memory and more speculative work.
+
+**Why the allocation is flat (one `K` for every lane), not head-prioritising.**
+The question "can non-head lanes eat the head's concurrency?" was considered and
+the answer is no: buffers and step-slots are **per-lane and independent**
+(`bufferSize × K` is a bound, not a shared pot), and the head is a single
+generator — inherently serial and consumer-paced — so it cannot use a bigger
+buffer or step share even if given one. A graduated per-lane `K` would hand
+*non-head* lanes more (they have the idle time to fill), the opposite of
+protecting the head; throttling non-head stepping ≈ lowering `bufferSize`. The
+only genuine contention is *external* (event loop / threadpool / pools / CPU),
+which the library can neither see nor schedule — so the honest levers are
+`bufferSize` (how many lanes) and `lookahead` (how deep), not an internal
+allocator.
 
 ### Abort, cleanup, and errors
 
@@ -196,7 +210,5 @@ clear `pending` at the top without the same hazard.
 - **Benchmarks**: eager rows in `benchmark/nested.js` / `benchmark/throughput.js`.
   Timerless fixtures measure bookkeeping overhead only (eager ≈ ordered, plus
   the lane objects); the *speedup* is proven by the fake-timer duration asserts
-  in `test/eager.spec.js`, not the benches.
-- **`lookahead?: number`**: expose `K` (currently the fixed `LANE_LOOKAHEAD = 1`
-  module constant) if a workload with expensive *between-yield* work appears. The
-  `Lane` typedef and `pumpLane` already parameterize on it.
+  in `test/eager.spec.js`, not the benches. A `lookahead: N` variant could be
+  added, though timerless fixtures can't show its latency effect either.

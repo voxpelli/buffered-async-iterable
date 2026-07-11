@@ -13,11 +13,12 @@ import {
 // to carry their own `err` property into error envelopes, dropping values.
 const ERR = Symbol('bufferedAsyncMap error');
 
-// `ordered: 'eager'` look-ahead: how many values a not-yet-at-head lane may
-// buffer before it parks (backpressure). 1 captures the fan-out win — the
+// `ordered: 'eager'` look-ahead default: how many values a not-yet-at-head lane
+// may buffer before it parks (backpressure). 1 captures the fan-out win — the
 // expensive work is before the first yield — while keeping total buffering
-// bounded at bufferSize × LANE_LOOKAHEAD regardless of generator length.
-const LANE_LOOKAHEAD = 1;
+// bounded at bufferSize × lookahead regardless of generator length. The caller
+// can override it with the `lookahead` option (eager mode only).
+const DEFAULT_LANE_LOOKAHEAD = 1;
 
 // Hoisted rejection-normalizers for safeStep — module-level so the hot pull
 // path allocates zero catch closures per slot (they close over nothing but
@@ -108,7 +109,7 @@ async function * yieldIterable (item) {
  *
  * @template T
  * @param {Array<AsyncIterable<T> | (Iterable<T> & object) | T[]>} input array of (async) iterables to merge — validated eagerly, string elements rejected
- * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined, ordered?: boolean|'eager'|undefined, signal?: AbortSignal|undefined }} [options] same options as `bufferedAsyncMap`; `ordered: true` drains the inputs in array order, `ordered: 'eager'` dispatches concurrently but still delivers in array order (see [Ordered mode](ADVANCED.md#ordered-mode))
+ * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined, lookahead?: number|undefined, ordered?: boolean|'eager'|undefined, signal?: AbortSignal|undefined }} [options] same options as `bufferedAsyncMap`; `ordered: true` drains the inputs in array order, `ordered: 'eager'` dispatches concurrently but still delivers in array order (see [Ordered mode](ADVANCED.md#ordered-mode)); `lookahead` (eager only) is the per-input buffer depth
  * @returns {BufferedAsyncIterableIterator<T>} async iterator with guaranteed `return()`, `throw()` and `[Symbol.asyncDispose]()`
  */
 export function mergeIterables (input, options) {
@@ -174,7 +175,7 @@ export function mergeIterables (input, options) {
  * @template R
  * @param {AsyncIterable<T> | (Iterable<T> & object) | T[]} input async iterable, sync iterable or array (strings rejected — spread first if chars are intended)
  * @param {(item: T, opts: { signal: AbortSignal }) => (Promise<R>|AsyncIterable<R>)} callback async function, or async generator whose values merge into the stream; `signal` is always present
- * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, ordered?: boolean|'eager'|undefined, signal?: AbortSignal|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined }} [options] `bufferSize` (concurrency, default 6), `cleanupTimeout` (ms cap on close-time source cleanup, default unbounded), `ordered` (source-order delivery, default false; `'eager'` dispatches callbacks concurrently while still delivering in source order — see [Ordered mode](ADVANCED.md#ordered-mode)), `signal` (external abort), `errors` (default 'fail-eventually')
+ * @param {{ bufferSize?: number|undefined, cleanupTimeout?: number|undefined, lookahead?: number|undefined, ordered?: boolean|'eager'|undefined, signal?: AbortSignal|undefined, errors?: 'fail-eventually'|'fail-fast'|undefined }} [options] `bufferSize` (concurrency, default 6), `cleanupTimeout` (ms cap on close-time source cleanup, default unbounded), `lookahead` (positive integer, `ordered: 'eager'` only, default 1 — how many values a not-yet-at-head input may buffer ahead of delivery), `ordered` (source-order delivery, default false; `'eager'` dispatches callbacks concurrently while still delivering in source order — see [Ordered mode](ADVANCED.md#ordered-mode)), `signal` (external abort), `errors` (default 'fail-eventually')
  * @returns {BufferedAsyncIterableIterator<R>} async iterator with guaranteed `return()`, `throw()` and `[Symbol.asyncDispose]()`
  */
 export function bufferedAsyncMap (input, callback, options) {
@@ -184,12 +185,10 @@ export function bufferedAsyncMap (input, callback, options) {
   // second positional booleans mean DIFFERENT things (isSubIterator vs
   // fromSubIterator), hence the inline arg comments at every call site.
 
-  // DESIGN SPIKE (not yet implemented — see DESIGN-eager-mode.md). The `Lane`
-  // shape backs `ordered: 'eager'`: one lane per in-flight source item, in
-  // source order, with a private K-bounded buffer so non-head generators
-  // dispatch concurrently without unbounded buffering. Declared here (typed)
-  // so the design is reviewable and the follow-up implementation has the
-  // contract to fill in; the helpers below currently throw.
+  // The `Lane` shape backs `ordered: 'eager'` (see DESIGN-eager-mode.md): one
+  // lane per in-flight source item, in source order, with a private buffer
+  // bounded to `laneLookahead` values so non-head generators dispatch
+  // concurrently without unbounded buffering.
   /**
    * @template R
    * @typedef {{
@@ -207,6 +206,7 @@ export function bufferedAsyncMap (input, callback, options) {
     bufferSize = 6,
     cleanupTimeout,
     errors: errorsMode = 'fail-eventually',
+    lookahead,
     ordered = false,
     signal: externalSignal,
   } = options || {};
@@ -258,6 +258,17 @@ export function bufferedAsyncMap (input, callback, options) {
   // so a bare `if (ordered)` would misroute eager through the ordered path.
   /** @type {'unordered' | 'ordered' | 'eager'} */
   const mode = ordered === 'eager' ? 'eager' : (ordered ? 'ordered' : 'unordered');
+
+  // `lookahead` tunes the per-lane buffer depth for eager mode only — buffers
+  // and step-slots are per-lane, so it trades memory (and critical-path priority
+  // under shared-resource contention) for pipeline depth, not the head's own
+  // concurrency. Validate the shape, then reject it outright with any non-eager
+  // mode rather than silently ignoring a knob that would do nothing there.
+  if (lookahead !== undefined) {
+    if (!Number.isInteger(lookahead) || lookahead < 1) throw new TypeError('Expected lookahead to be a positive integer');
+    if (mode !== 'eager') throw new TypeError("Expected lookahead to be used only with ordered: 'eager'");
+  }
+  const laneLookahead = lookahead ?? DEFAULT_LANE_LOOKAHEAD;
 
   // Invocation happens only after every validation above has passed — the
   // captured method (never a re-read of the input) is what gets called. The
@@ -1014,7 +1025,7 @@ export function bufferedAsyncMap (input, callback, options) {
   // ─── ordered: 'eager' — concurrent dispatch, in-order delivery ───────────
   // See DESIGN-eager-mode.md. One lane per in-flight source item, in source
   // order; lanes[0] is the delivery head. Non-head lanes step up to
-  // LANE_LOOKAHEAD values ahead in the background (that overlap is the
+  // `laneLookahead` values ahead in the background (that overlap is the
   // concurrency win) then park; the consumer only ever waits on the head.
   // Fully isolated from the ordered/unordered hot paths — reached only through
   // the `mode === 'eager'` gates at construction and in next().
@@ -1064,8 +1075,8 @@ export function bufferedAsyncMap (input, callback, options) {
 
   /**
    * Background drainer: while a lane has an open iterator, no step in flight,
-   * and fewer than LANE_LOOKAHEAD buffered values, take one step. Non-head
-   * lanes self-limit to LANE_LOOKAHEAD and park; the head resumes as the
+   * and fewer than `laneLookahead` buffered values, take one step. Non-head
+   * lanes self-limit to `laneLookahead` and park; the head resumes as the
    * consumer drains it. Sets `lane.pending` (which never rejects) so a parked
    * nextValueEager can race it.
    *
@@ -1075,7 +1086,7 @@ export function bufferedAsyncMap (input, callback, options) {
   const pumpLane = (lane) => {
     const { iterator } = lane;
     if (!iterator || lane.done || lane.terminalErr || lane.pending) return;
-    if (lane.buffer.length >= LANE_LOOKAHEAD) return;
+    if (lane.buffer.length >= laneLookahead) return;
 
     lane.pending = safeStep(iterator, catchSubStepErr).then(result => {
       lane.pending = undefined;
@@ -1087,7 +1098,7 @@ export function bufferedAsyncMap (input, callback, options) {
 
       if (kind === 0) {
         lane.buffer.push(/** @type {R} */ (value));
-        pumpLane(lane); // refill toward LANE_LOOKAHEAD; a no-op once full
+        pumpLane(lane); // refill toward laneLookahead; a no-op once full
         return lane;
       }
 

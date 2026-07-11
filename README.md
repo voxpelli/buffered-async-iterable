@@ -148,7 +148,7 @@ Applies `callback` to every item of `input`, keeping up to `bufferSize` calls in
 
 #### Syntax
 
-`bufferedAsyncMap(input, callback[, { bufferSize=6, cleanupTimeout, ordered=false, signal, errors='fail-eventually' }]) => BufferedAsyncIterableIterator`
+`bufferedAsyncMap(input, callback[, { bufferSize=6, cleanupTimeout, ordered=false, lookahead=1, signal, errors='fail-eventually' }]) => BufferedAsyncIterableIterator`
 
 The returned `BufferedAsyncIterableIterator` type (exported in the type declarations) is an `AsyncIterableIterator` that additionally guarantees `return()`, `throw()` and `[Symbol.asyncDispose]()` to be present.
 
@@ -167,6 +167,7 @@ Two things worth knowing up front (the full contract lives in [Advanced semantic
 * `bufferSize` – _optional_ – defaults to `6`, the max number of items processed simultaneously. Prefetching is speculative — up to `bufferSize` concurrent `next()` calls can be in flight before one resolves `done` (after which the source is never pulled again); async-generator sources serialize those natively, but a hand-rolled iterator that throws on concurrent pulls should use `bufferSize: 1`. Very large buffers pay an O(bufferSize) cost per unordered pull. Details in [Advanced semantics](ADVANCED.md#construction-and-the-prefetch-model).
 * `cleanupTimeout` – _optional_ – a millisecond cap on how long close/abort waits for the source's `.return()` to settle. Defaults to no timeout (await forever), matching `AsyncGenerator`. See [Cancellation](#cancellation).
 * `ordered` – _optional_ – defaults to `false`. When `true`, results are delivered in source order. For plain-value callbacks concurrency is unchanged — only the yield order; async-generator callbacks, however, run one at a time under `ordered: true` (`bufferSize` does not increase their concurrency). Use `ordered: 'eager'` to dispatch callbacks (generators included) concurrently while still delivering in source order. See [Ordered mode](ADVANCED.md#ordered-mode).
+* `lookahead` – _optional_ – **`ordered: 'eager'` only** (a positive integer, default `1`; throws with any other mode). How many values a not-yet-at-head input may buffer ahead of delivery — total buffering is bounded at `bufferSize × lookahead`. It trades memory (and, under shared-resource contention, the head's critical-path priority) for pipeline depth on deep per-item generators; `bufferSize` is the lever for contention. See [Ordered mode](ADVANCED.md#ordered-mode).
 * `signal` – _optional_ – an `AbortSignal`. When aborted, the next `iterator.next()` rejects with `signal.reason` exactly once and all later calls resolve `{ done: true, value: undefined }`. See [Cancellation](#cancellation).
 * `errors` – _optional_ – defaults to `'fail-eventually'`. Controls how errors from the callback or the source surface to the consumer. See [Errors](#errors).
 
@@ -178,7 +179,7 @@ Merges all given (async) iterables in parallel, returning the values as they res
 
 #### Syntax
 
-`mergeIterables(input[, { bufferSize=6, cleanupTimeout, ordered=false, signal, errors='fail-eventually' }]) => BufferedAsyncIterableIterator`
+`mergeIterables(input[, { bufferSize=6, cleanupTimeout, ordered=false, lookahead=1, signal, errors='fail-eventually' }]) => BufferedAsyncIterableIterator`
 
 #### Arguments
 
@@ -186,8 +187,8 @@ Merges all given (async) iterables in parallel, returning the values as they res
 
 #### Options
 
-* `ordered` – _optional_ – defaults to `false`. When `false` (the default), values are interleaved as they resolve; when `true`, the merge preserves the input array order (drains the first iterable before pulling from the second, etc.).
-* The remaining options (`bufferSize`, `cleanupTimeout`, `signal`, `errors`) behave exactly as documented under [`bufferedAsyncMap`](#bufferedasyncmap).
+* `ordered` – _optional_ – defaults to `false`. When `false` (the default), values are interleaved as they resolve; when `true`, the merge preserves the input array order (drains the first iterable before pulling from the second, etc.); `'eager'` merges concurrently while still preserving input order.
+* The remaining options (`bufferSize`, `cleanupTimeout`, `lookahead`, `signal`, `errors`) behave exactly as documented under [`bufferedAsyncMap`](#bufferedasyncmap).
 
 ## Cancellation
 
