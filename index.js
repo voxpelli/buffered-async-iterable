@@ -185,9 +185,9 @@ export function bufferedAsyncMap (input, callback, options) {
   // second positional booleans mean DIFFERENT things (isSubIterator vs
   // fromSubIterator), hence the inline arg comments at every call site.
 
-  // The `Lane` shape backs `ordered: 'eager'` (see DESIGN-eager-mode.md): one
-  // lane per in-flight source item, in source order, with a private buffer
-  // bounded to `laneLookahead` values so non-head generators dispatch
+  // The `Lane` shape backs `ordered: 'eager'` (contract in ADVANCED.md, "Ordered
+  // mode"): one lane per in-flight source item, in source order, with a private
+  // buffer bounded to `laneLookahead` values so non-head generators dispatch
   // concurrently without unbounded buffering.
   /**
    * @template R
@@ -249,8 +249,8 @@ export function bufferedAsyncMap (input, callback, options) {
   if (errorsMode !== 'fail-eventually' && errorsMode !== 'fail-fast') throw new TypeError("Expected errors to be 'fail-eventually' or 'fail-fast'");
   // `ordered` was historically boolean-only and unvalidated (just defaulted).
   // The `'eager'` value opts into concurrent dispatch with in-order delivery
-  // (see DESIGN-eager-mode.md); anything else that isn't a boolean is rejected
-  // so a typo can't silently pick a mode.
+  // (ADVANCED.md, "Ordered mode"); anything else that isn't a boolean is
+  // rejected so a typo can't silently pick a mode.
   if (typeof ordered !== 'boolean' && ordered !== 'eager') throw new TypeError("Expected ordered to be a boolean or 'eager'");
 
   // Single normalization of the three delivery modes. Every dispatch/race site
@@ -1023,8 +1023,8 @@ export function bufferedAsyncMap (input, callback, options) {
   };
 
   // ─── ordered: 'eager' — concurrent dispatch, in-order delivery ───────────
-  // See DESIGN-eager-mode.md. One lane per in-flight source item, in source
-  // order; lanes[0] is the delivery head. Non-head lanes step up to
+  // Contract in ADVANCED.md, "Ordered mode". One lane per in-flight source
+  // item, in source order; lanes[0] is the delivery head. Non-head lanes step up to
   // `laneLookahead` values ahead in the background (that overlap is the
   // concurrency win) then park; the consumer only ever waits on the head.
   // Fully isolated from the ordered/unordered hot paths — reached only through

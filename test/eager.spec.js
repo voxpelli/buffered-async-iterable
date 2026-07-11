@@ -61,8 +61,8 @@ function unboundedNonHeadIterator (stepSpy, lookahead) {
 
 // ─────────────────────────────────────────────────────────────────────────
 // `ordered: 'eager'` — concurrent callback dispatch with in-order delivery
-// (see DESIGN-eager-mode.md). The first block covers option handling; the
-// second exercises the delivery/concurrency/backpressure/abort/error contract.
+// (contract in ADVANCED.md, "Ordered mode"). The first block covers option
+// handling; the second exercises delivery/concurrency/backpressure/abort/error.
 // ─────────────────────────────────────────────────────────────────────────
 
 describe("bufferedAsyncMap() ordered: 'eager'", () => {
