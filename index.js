@@ -401,9 +401,25 @@ export function bufferedAsyncMap (input, callback, options) {
   // test/per-task-signal.spec.js (and test/abort.spec.js for the parallel
   // return()+abort case) pin the no-options case.
   const internalAbortController = new AbortController();
+  // AbortController#signal is a native accessor — read it once here rather
+  // than once per dispatched item at the two callback-dispatch sites.
+  const internalSignal = internalAbortController.signal;
 
   /** @type {{ reason: unknown, delivered: boolean } | undefined} */
   let abortReason;
+
+  /**
+   * The producer stop-set, shared by every site that starts a new pull —
+   * fillQueue, admitLanes and pumpLane (a lane step IS a pull), plus the
+   * consumer-side forfeit in nextValueEager that mirrors pumpLane's refusal.
+   * One predicate so a future stop condition cannot be added to one pull
+   * loop and missed in another (that drift has produced real bugs on the
+   * eager gate twice). Per-site extras (mainReturnedDone, lane-local state)
+   * stay inline at their call sites.
+   *
+   * @returns {boolean}
+   */
+  const stopPulling = () => isDone || abortReason !== undefined || capturedErrors.length > 0;
 
   /**
    * Single writer for the abort pairing: records the consumer-facing
@@ -420,7 +436,7 @@ export function bufferedAsyncMap (input, callback, options) {
     if (!abortReason) {
       abortReason = { reason, delivered: false };
     }
-    if (!internalAbortController.signal.aborted) {
+    if (!internalSignal.aborted) {
       internalAbortController.abort(reason);
     }
     return abortReason;
@@ -449,7 +465,7 @@ export function bufferedAsyncMap (input, callback, options) {
         // the detach mechanism ever change.
         if (isDone) return;
         requestConsumerAbort(safeSignal.reason);
-      }, { once: true, signal: internalAbortController.signal });
+      }, { once: true, signal: internalSignal });
     }
   }
 
@@ -473,7 +489,7 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {{ resolve: (value: typeof ABORT_SENTINEL) => void } | undefined} */
   let currentPark;
 
-  internalAbortController.signal.addEventListener(
+  internalSignal.addEventListener(
     'abort',
     () => currentPark?.resolve(ABORT_SENTINEL),
     { once: true }
@@ -489,7 +505,7 @@ export function bufferedAsyncMap (input, callback, options) {
    * @returns {Promise<void>}
    */
   const doCleanup = async () => {
-    if (!internalAbortController.signal.aborted) {
+    if (!internalSignal.aborted) {
       // Deliberately WITHOUT abortReason and without a reason arg: a plain
       // close has no consumer-facing reason to deliver. requestConsumerAbort
       // is the single writer for the reason-paired abort; this bare abort is
@@ -498,15 +514,14 @@ export function bufferedAsyncMap (input, callback, options) {
       internalAbortController.abort();
     }
 
-    // Live `ordered: 'eager'` lane iterators are owed a .return() too. Skip any
-    // already queued in pendingCloses (a malformed lane result records the
-    // iterator there) so no iterator is returned twice.
+    // Live `ordered: 'eager'` lane iterators are owed a .return() too. One
+    // may also sit in pendingCloses (a malformed lane result records it
+    // there); the Set below is what dedupes that overlap — same as every
+    // other pair of lists it unions.
     /** @type {Array<AsyncIterator<R, void, void>>} */
     const laneIterators = [];
     for (const lane of lanes) {
-      if (lane.iterator && !pendingCloses.includes(lane.iterator)) {
-        laneIterators.push(lane.iterator);
-      }
+      if (lane.iterator) laneIterators.push(lane.iterator);
     }
 
     // Source .return() rejections are intentionally swallowed: allSettled
@@ -656,7 +671,7 @@ export function bufferedAsyncMap (input, callback, options) {
   // happily accepts any positive integer.
   const fillQueue = () => {
     while (bufferedPromises.length < bufferSize) {
-      if (capturedErrors.length > 0 || isDone || abortReason) return;
+      if (stopPulling()) return;
 
       if (!fillOneSlot()) return;
     }
@@ -819,7 +834,7 @@ export function bufferedAsyncMap (input, callback, options) {
           // bypassing the errors mode entirely.
           try {
             // eslint-disable-next-line promise/no-callback-in-promise
-            const callbackResult = callback(/** @type {T} */ (stepValue), { signal: internalAbortController.signal });
+            const callbackResult = callback(/** @type {T} */ (stepValue), { signal: internalSignal });
             const isSubIterator = isAsyncIterable(callbackResult);
             const value = await callbackResult;
 
@@ -1129,15 +1144,15 @@ export function bufferedAsyncMap (input, callback, options) {
    */
   const pumpLane = (lane) => {
     const { iterator } = lane;
-    // The full fillQueue stop-set, because a lane step IS a pull: isDone (a
-    // step resolving after close must not pull an iterator doCleanup already
+    // The shared stop-set, because a lane step IS a pull: isDone (a step
+    // resolving after close must not pull an iterator doCleanup already
     // .return()ed), abortReason (an abort not yet delivered — isDone flips
     // only on the delivering pull — must already stop new steps), and
     // capturedErrors (after a fail-eventually capture ordered: true never
     // steps a generator again — fillQueue refuses — so eager must stop too;
     // work already in flight still drains, but nothing new starts). The
     // guards also cover the re-pump from this function's own .then.
-    if (isDone || abortReason || capturedErrors.length > 0 || !iterator || lane.done || lane.terminalErr || lane.pending) return;
+    if (stopPulling() || !iterator || lane.done || lane.terminalErr || lane.pending) return;
     if (lane.buffer.length >= laneLookahead) return;
 
     lane.pending = safeStep(iterator, catchSubStepErr).then(result => {
@@ -1235,7 +1250,7 @@ export function bufferedAsyncMap (input, callback, options) {
 
       try {
         // eslint-disable-next-line promise/no-callback-in-promise
-        const callbackResult = callback(/** @type {T} */ (value), { signal: internalAbortController.signal });
+        const callbackResult = callback(/** @type {T} */ (value), { signal: internalSignal });
         const maybeSub = isAsyncIterable(callbackResult);
         const resolved = await callbackResult;
 
@@ -1286,7 +1301,7 @@ export function bufferedAsyncMap (input, callback, options) {
    */
   const admitLanes = () => {
     while (lanes.length < bufferSize) {
-      if (capturedErrors.length > 0 || isDone || abortReason || mainReturnedDone) return;
+      if (stopPulling() || mainReturnedDone) return;
       admitOneLane();
     }
   };
@@ -1325,12 +1340,14 @@ export function bufferedAsyncMap (input, callback, options) {
           continue;
         }
 
-        // Head has a buffered value → deliver it (the in-order guarantee),
-        // resume stepping the head, and top up admission.
+        // Head has a buffered value → deliver it (the in-order guarantee) and
+        // resume stepping the head. No admission top-up here: delivering a
+        // value frees no lane slot (only shifting a lane does), and every
+        // path reaches this branch through the loop-top admitLanes() in the
+        // same synchronous frame, so a second call could never admit.
         if (head.buffer.length > 0) {
           const value = /** @type {R} */ (head.buffer.shift());
           pumpLane(head);
-          admitLanes();
           return /** @type {IteratorYieldResult<R>} */ ({ value });
         }
 
@@ -1367,8 +1384,13 @@ export function bufferedAsyncMap (input, callback, options) {
         // same way — once shifted, the lane is invisible to doCleanup's
         // `lanes` sweep, and a generator holding resources in a `finally`
         // would leak them. Without the shift the park below would wait on a
-        // step that can no longer exist.
-        if (!head.pending && capturedErrors.length > 0) {
+        // step that can no longer exist. Only the capture arm of stopPulling
+        // can be live here — isDone and abortReason both return at the loop
+        // top with no await in between — but deriving from the shared
+        // predicate keeps this forfeit structurally bound to pumpLane's
+        // refusal set: a new stop condition cannot leave a dispatched,
+        // empty-buffer head parked on a step pumpLane refuses to start.
+        if (!head.pending && stopPulling()) {
           if (head.iterator) recordPendingClose(head.iterator);
           lanes.shift();
           continue;
@@ -1397,13 +1419,16 @@ export function bufferedAsyncMap (input, callback, options) {
   /** @type {Promise<IteratorResult<R>>} */
   let currentStep;
 
+  // The dispatch mode is fixed at construction — resolve the consumer
+  // function once instead of re-deciding on every pull.
+  const stepFn = mode === 'eager' ? nextValueEager : nextValue;
+
   /** @type {BufferedAsyncIterableIterator<R>} */
   const resultAsyncIterableIterator = {
     async next () {
       // Chain via then(nextValue, nextValue) so a rejection on one .next() does
       // not poison every subsequent call — the next call still reaches
       // nextValue() which observes the post-rejection state machine.
-      const stepFn = mode === 'eager' ? nextValueEager : nextValue;
       currentStep = currentStep
         ? currentStep.then(stepFn, stepFn)
         : stepFn();
