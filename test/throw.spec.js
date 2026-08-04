@@ -1,3 +1,5 @@
+/* eslint-disable promise/prefer-await-to-then */
+
 import chai from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import chaiQuantifiers from 'chai-quantifiers';
@@ -17,60 +19,60 @@ chai.use(sinonChai);
 
 chai.should();
 
-describe.skip('bufferedAsyncMap() AsyncInterface throw()', () => {
+describe('bufferedAsyncMap() AsyncInterface throw()', () => {
   const count = 6;
 
+  /** @type {import('sinon').SinonFakeTimers} */
+  let clock;
   /** @type {AsyncIterable<number>} */
   let baseAsyncIterable;
-  /** @type {number[]} */
-  let expectedResult;
 
   beforeEach(() => {
+    clock = sinon.useFakeTimers();
     baseAsyncIterable = yieldValuesOverTime(count, (i) => i % 2 === 1 ? 2000 : 100);
-
-    expectedResult = [];
-    for (let i = 0; i < count; i++) {
-      expectedResult.push(i);
-    }
   });
 
-  it('should end the iterator when called', async () => {
-    const errorToThrow = new Error('Yet another error');
+  afterEach(() => {
+    sinon.restore();
+  });
+
+  it('throw(err) rejects with err and subsequent .next() returns done', async () => {
+    const errorToThrow = new Error('thrown');
 
     const iterator = bufferedAsyncMap(baseAsyncIterable, async (item) => item);
 
-    await iterator.next().should.eventually.deep.equal({ value: 0 });
-    await iterator.throw(errorToThrow).should.eventually.be.rejectedWith(errorToThrow);
-    await iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
+    const first = iterator.next();
+    await clock.runAllAsync();
+    await first.should.eventually.deep.equal({ value: 0 });
+
+    const tossed = iterator.throw(errorToThrow).catch(err => ({ rejectedWith: err }));
+    await clock.runAllAsync();
+    chai.expect(await tossed).to.deep.equal({ rejectedWith: errorToThrow });
+
+    const after = iterator.next();
+    await clock.runAllAsync();
+    await after.should.eventually.deep.equal({ done: true, value: undefined });
   });
 
-  it('should be called when a loop throws', async () => {
-    const iterator = bufferedAsyncMap(baseAsyncIterable, async (item) => item);
-    const returnSpy = sinon.spy(iterator, 'return');
-    const throwSpy = sinon.spy(iterator, 'throw');
-    const errorToThrow = new Error('Yet another error');
+  it('throw(err) calls source.return() once', async () => {
+    const errorToThrow = new Error('thrown');
+    const source = yieldValuesOverTime(50, 100);
+    const sourceIterator = source[Symbol.asyncIterator]();
+    const returnSpy = sinon.spy(sourceIterator, 'return');
 
-    let caught;
+    const iterator = bufferedAsyncMap(
+      { [Symbol.asyncIterator]: () => sourceIterator },
+      async (item) => item
+    );
 
-    // Inspired by https://github.com/WebKit/WebKit/blob/1a09d8d95ba6085df4ef44306c4bfc9fc86fdbc7/JSTests/test262/test/language/expressions/yield/star-rhs-iter-thrw-thrw-get-err.js
-    async function * g () {
-      try {
-        yield * iterator;
-      } catch (err) {
-        caught = err;
-        throw err;
-      }
-    }
+    const first = iterator.next();
+    await clock.tickAsync(0);
+    await first;
 
-    const wrappedIterator = g();
+    const tossed = iterator.throw(errorToThrow).catch(err => err);
+    await clock.runAllAsync();
+    await tossed;
 
-    await wrappedIterator.next().should.eventually.deep.equal({ done: false, value: 0 });
-    await wrappedIterator.throw(errorToThrow).should.eventually.be.rejectedWith(errorToThrow);
-    await wrappedIterator.next().should.eventually.deep.equal({ done: true, value: undefined });
-    await iterator.next().should.eventually.deep.equal({ done: true, value: undefined });
-
-    (caught || {}).should.equal(errorToThrow);
-    throwSpy.should.have.been.calledOnceWithExactly(errorToThrow);
-    returnSpy.should.not.have.been.called;
+    returnSpy.should.have.been.calledOnce;
   });
 });

@@ -4,34 +4,15 @@ import chaiQuantifiers from 'chai-quantifiers';
 import sinon from 'sinon';
 import sinonChai from 'sinon-chai';
 
+import {
+  stubAsyncIterator,
+} from './utils.js';
+
 chai.use(chaiAsPromised);
 chai.use(chaiQuantifiers);
 chai.use(sinonChai);
 
 const should = chai.should();
-
-function stubAsyncIterator () {
-  const next = sinon.stub();
-  const returnStub = sinon.stub();
-  const throwStub = sinon.stub();
-
-  /** @satisfies {AsyncIterator<*>} */
-  const asyncIterator = {
-    next,
-    'return': returnStub,
-    'throw': throwStub,
-  };
-
-  /** @type {AsyncIterable<*>} */
-  const asyncIterable = {
-    [Symbol.asyncIterator]: () => asyncIterator,
-  };
-
-  return {
-    asyncIterable,
-    asyncIterator,
-  };
-}
 
 describe('The built in "yield *" functionality', () => {
   afterEach(() => {
@@ -96,8 +77,10 @@ describe('The built in "yield *" functionality', () => {
     }
 
     asyncIterator.next.should.have.been.calledTwice;
+    // Native `yield *` does not call the inner iterator's .return() when the
+    // inner .next() rejects — the delegation is already completing abruptly,
+    // so there is nothing to close. .throw() likewise isn't called here.
     asyncIterator.return.should.not.have.been.called;
-    // TODO: I thougt it should have been?
     asyncIterator.throw.should.not.have.been.called;
 
     await mainIterator[Symbol.asyncIterator]().next().should.eventually.deep.equal({ done: true, value: undefined });

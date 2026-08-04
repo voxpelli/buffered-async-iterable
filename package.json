@@ -1,34 +1,51 @@
 {
   "name": "buffered-async-iterable",
   "version": "1.0.1",
-  "description": "Creates a prefetched async iterable",
-  "homepage": "http://github.com/voxpelli/buffered-async-iterable",
+  "description": "Buffered parallel processing of async iterables / generators",
+  "homepage": "https://github.com/voxpelli/buffered-async-iterable",
   "repository": {
     "type": "git",
-    "url": "git://github.com/voxpelli/buffered-async-iterable.git"
+    "url": "git+https://github.com/voxpelli/buffered-async-iterable.git"
   },
   "keywords": [
     "async",
     "iterator",
-    "highwatermark"
+    "highwatermark",
+    "async-iterable",
+    "async-generator",
+    "concurrency",
+    "parallel",
+    "map",
+    "merge",
+    "buffer",
+    "backpressure"
   ],
   "author": "Pelle Wessman <pelle@kodfabrik.se> (http://kodfabrik.se/)",
   "license": "MIT",
   "engines": {
-    "node": ">=18.6.0"
+    "node": "^22.16.0 || >=24.0.0",
+    "typescript": ">=5.9"
   },
   "type": "module",
-  "exports": "./index.js",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
   "types": "index.d.ts",
   "files": [
     "lib/**/*.js",
-    "lib/**/*.d.ts",
-    "lib/**/*.d.ts.map",
     "index.js",
     "index.d.ts",
-    "index.d.ts.map"
+    "index.d.ts.map",
+    "ADVANCED.md"
   ],
   "scripts": {
+    "bench": "node --expose-gc --allow-natives-syntax benchmark/index.js",
+    "bench:json": "node --expose-gc --allow-natives-syntax benchmark/index.js --json",
+    "bench:smoke": "node --check benchmark/index.js && node --check benchmark/throughput.js && node --check benchmark/abort.js && node --check benchmark/nested.js && node --check benchmark/fixtures.js",
     "build": "run-s build:*",
     "build:0": "run-s clean",
     "build:1-declaration": "tsc -p declaration.tsconfig.json",
@@ -37,7 +54,7 @@
     "check:knip": "knip",
     "check:lint": "eslint --report-unused-disable-directives .",
     "check:tsc": "tsc",
-    "check:type-coverage": "type-coverage --detail --strict --at-least 95 --ignore-files 'test/*.spec.js'",
+    "check:type-coverage": "type-coverage --detail --strict --at-least 99 --ignore-files 'test/**/*.js' --ignore-files 'benchmark/**/*.js'",
     "clean": "run-p clean:*",
     "clean:declarations": "rm -rf $(find . -maxdepth 2 -type f -name '*.d.ts*')",
     "prepare": "husky",
@@ -49,13 +66,12 @@
   "devDependencies": {
     "@types/chai": "^4.3.19",
     "@types/chai-as-promised": "^7.1.8",
-    "@types/chai-quantifiers": "^1.0.4",
     "@types/mocha": "^10.0.8",
-    "@types/node": "^18.19.50",
+    "@types/node": "^22.0.0",
     "@types/sinon": "^17.0.3",
     "@types/sinon-chai": "^3.2.12",
     "@voxpelli/eslint-config": "^25.0.2",
-    "@voxpelli/tsconfig": "^14.0.0",
+    "@voxpelli/tsconfig": "^16.2.1",
     "c8": "^10.1.2",
     "chai": "^4.5.0",
     "chai-as-promised": "^7.1.2",
@@ -64,12 +80,13 @@
     "husky": "^9.1.6",
     "installed-check": "^9.3.0",
     "knip": "^5.30.2",
+    "mitata": "^1.0.34",
     "mocha": "^10.7.3",
     "npm-run-all2": "^6.2.2",
     "sinon": "^19.0.2",
     "sinon-chai": "^3.7.0",
     "type-coverage": "^2.29.1",
-    "typescript": "~5.5.3",
+    "typescript": "~5.9",
     "validate-conventional-commit": "^1.0.4"
   }
 }
