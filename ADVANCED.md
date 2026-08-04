@@ -138,10 +138,16 @@ a very-long or unbounded spread-cost generator no `lookahead` both bounds memory
 *and* recovers full concurrency, so where out-of-order delivery is acceptable
 reach for `ordered: false` there instead.
 
-Ordering, abort delivery, and both error modes are observably identical to
+Ordering, abort delivery, and both error modes follow the same rules as
 `ordered: true`. In particular a `fail-fast` error surfaces in source order —
-the *source-order-earliest* error wins, not the chronologically-first — and a
-generator's already-buffered values are delivered before its own later error.
+the *source-order-earliest* error wins, not the chronologically-first — a
+generator's already-buffered values are delivered before its own later error,
+and after a `fail-eventually` capture no lane is stepped again (the same stop
+`ordered: true` applies to its feed). One drain-size caveat follows from the
+dispatch being eager: work already *started* before the capture still drains,
+so a `fail-eventually` drain can surface values `ordered: true` — having never
+started them — would not. The stop policy is identical; the in-flight set it
+applies to is larger.
 Lane ordering relies on the source answering `.next()` in FIFO order; a
 hand-rolled iterator that does not should use `bufferSize: 1` or be wrapped in
 an async generator (the same caveat as the prefetch model above).

@@ -148,7 +148,7 @@ Applies `callback` to every item of `input`, keeping up to `bufferSize` calls in
 
 #### Syntax
 
-`bufferedAsyncMap(input, callback[, { bufferSize=6, cleanupTimeout, ordered=false, lookahead=1, signal, errors='fail-eventually' }]) => BufferedAsyncIterableIterator`
+`bufferedAsyncMap(input, callback[, { bufferSize=6, cleanupTimeout, ordered=false, lookahead, signal, errors='fail-eventually' }]) => BufferedAsyncIterableIterator`
 
 The returned `BufferedAsyncIterableIterator` type (exported in the type declarations) is an `AsyncIterableIterator` that additionally guarantees `return()`, `throw()` and `[Symbol.asyncDispose]()` to be present.
 
@@ -179,7 +179,7 @@ Merges all given (async) iterables in parallel, returning the values as they res
 
 #### Syntax
 
-`mergeIterables(input[, { bufferSize=6, cleanupTimeout, ordered=false, lookahead=1, signal, errors='fail-eventually' }]) => BufferedAsyncIterableIterator`
+`mergeIterables(input[, { bufferSize=6, cleanupTimeout, ordered=false, lookahead, signal, errors='fail-eventually' }]) => BufferedAsyncIterableIterator`
 
 #### Arguments
 
