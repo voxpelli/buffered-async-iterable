@@ -56,7 +56,7 @@ The function returns a stateful `AsyncIterableIterator` with these closure varia
 
 - `lib/find-least-targeted.js` — load-balancing: given a list of iterators and the current buffer, picks the iterator with fewest in-flight slots.
 - `lib/misc.js` — `makeIterableAsync(input)` (sync iterable → async iterable), `arrayDeleteInPlace(list, value)` (in-place splice by value), and `normalizeError(err, defaultMessage)` (coerce non-`Error` rejections at every catch site — reuse this rather than open-coding `err instanceof Error ? err : new Error(...)`).
-- `lib/type-checks.js` — `isSpecObject` (ECMA "Type(x) is Object" — callables included; for IteratorResult/GetIteratorFromMethod positions), `isAsyncIterable`, `isPartOfArray`, plus the internal (unexported) `isObject` they build on (truthy and `typeof === 'object'`; closes the `typeof null === 'object'` hole).
+- `lib/type-checks.js` — `isSpecObject` (ECMA "Type(x) is Object" — callables included; closes the `typeof null === 'object'` hole; for IteratorResult/GetIteratorFromMethod positions), `isAsyncIterable` (built on `isSpecObject`, since the callback-result fan-out is itself a GetIteratorFromMethod position — a callable carrying `Symbol.asyncIterator` must fan out, matching `for await`), and `isPartOfArray`.
 
 ### Public-API contracts worth preserving
 

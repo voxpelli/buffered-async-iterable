@@ -52,6 +52,12 @@ async function assertNoPerPullRetention (iterator, gc) {
 
 describe('bufferedAsyncMap() memory', () => {
   it('does not retain memory per pull on a long-lived unordered source', async function () {
+    // 22k awaited pulls plus repeated forced GC runs well inside Mocha's 2s
+    // default locally (~200ms), but a loaded CI runner has no such margin —
+    // and a timeout here would read as a memory regression rather than a slow
+    // box. Generous enough to absorb that, tight enough to still catch a hang.
+    this.timeout(30_000);
+
     const { gc } = globalThis;
 
     if (typeof gc !== 'function') {

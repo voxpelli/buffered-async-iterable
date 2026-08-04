@@ -189,16 +189,19 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
 
     /** @type {unknown} */
     let caught;
-    try {
-      // eslint-disable-next-line no-unused-vars
-      for await (const _ of iterator) {
-        // drain
+    const flow = (async () => {
+      try {
+        // eslint-disable-next-line no-unused-vars
+        for await (const _ of iterator) {
+          // drain
+        }
+      } catch (err) {
+        caught = err;
       }
-    } catch (err) {
-      caught = err;
-    }
+    })();
 
     await clock.runAllAsync();
+    await flow;
     chai.expect(caught).to.equal(sourceError);
   });
 
@@ -221,16 +224,19 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
 
     /** @type {unknown} */
     let caught;
-    try {
-      // eslint-disable-next-line no-unused-vars
-      for await (const _ of iterator) {
-        // drain
+    const flow = (async () => {
+      try {
+        // eslint-disable-next-line no-unused-vars
+        for await (const _ of iterator) {
+          // drain
+        }
+      } catch (err) {
+        caught = err;
       }
-    } catch (err) {
-      caught = err;
-    }
+    })();
 
     await clock.runAllAsync();
+    await flow;
     chai.expect(caught).to.equal(reason);
 
     const callsAfterFail = nextSpy.callCount;
@@ -300,16 +306,19 @@ describe('bufferedAsyncMap() errors: fail-fast', () => {
 
     /** @type {unknown} */
     let caught;
-    try {
-      // eslint-disable-next-line no-unused-vars
-      for await (const _ of bufferedAsyncMap(fromArray([0, 1, 2]), callback, { errors: 'fail-fast' })) {
-        // drain
+    const flow = (async () => {
+      try {
+        // eslint-disable-next-line no-unused-vars
+        for await (const _ of bufferedAsyncMap(fromArray([0, 1, 2]), callback, { errors: 'fail-fast' })) {
+          // drain
+        }
+      } catch (err) {
+        caught = err;
       }
-    } catch (err) {
-      caught = err;
-    }
+    })();
 
     await clock.runAllAsync();
+    await flow;
     chai.expect(caught).to.equal(reason);
     chai.expect(caught).to.not.be.instanceOf(AggregateError);
   });

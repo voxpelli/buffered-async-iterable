@@ -48,8 +48,24 @@ function sourceWithHostileResult (hostileAt, makeHostile, hooks = {}) {
 /** @type {(item: string) => *} */
 const truthyNonObjectIteratorCallback = () => ({ [Symbol.asyncIterator]: () => 42 });
 
-/** A data object that merely carries a non-callable Symbol.asyncIterator member. */
+/**
+ * A data object that merely carries a non-callable Symbol.asyncIterator member.
+ *
+ * @returns {*}
+ */
 const nonCallableMemberShape = () => ({ [Symbol.asyncIterator]: undefined, tag: 'data' });
+
+/**
+ * A *function* object carrying a callable Symbol.asyncIterator — spec-legal as
+ * an async iterable, since ECMA "Type(x) is Object" includes callables.
+ *
+ * @type {*}
+ */
+const callableAsyncIterable = () => 'never invoked as a function';
+callableAsyncIterable[Symbol.asyncIterator] = async function * () {
+  yield 'a';
+  yield 'b';
+};
 
 describe('bufferedAsyncMap() hostile iterator results', () => {
   // Envelope pipeline contract: no foreign-object read may reject a buffer
@@ -394,6 +410,21 @@ describe('bufferedAsyncMap() hostile iterator results', () => {
       collected.should.have.length(1);
       collected[0].should.have.property('tag', 'data');
     }
+  });
+
+  it('fans out a callable callback result carrying Symbol.asyncIterator (for-await parity)', async () => {
+    // ECMA "Type(x) is Object" includes functions, so `for await (… of fn)`
+    // iterates a function carrying a callable Symbol.asyncIterator. The
+    // dispatch-time gate has to agree with the consume-time GetMethod read,
+    // which already accepts callables — otherwise this is silently delivered
+    // as a plain value instead of being fanned out.
+    /** @type {*[]} */
+    const collected = [];
+    for await (const value of bufferedAsyncMap(['x'], () => callableAsyncIterable)) {
+      collected.push(value);
+    }
+
+    collected.should.deep.equal(['a', 'b']);
   });
 
   it('closes a sub-iterator exactly once when several in-flight pulls all resolve malformed', async () => {
