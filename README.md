@@ -165,7 +165,7 @@ Two things worth knowing up front (the full contract lives in [Advanced semantic
 #### Options
 
 * `bufferSize` – _optional_ – defaults to `6`, the max number of items processed simultaneously. Prefetching is speculative — up to `bufferSize` concurrent `next()` calls can be in flight before one resolves `done` (after which the source is never pulled again); async-generator sources serialize those natively, but a hand-rolled iterator that throws on concurrent pulls should use `bufferSize: 1`. Very large buffers pay an O(bufferSize) cost per unordered pull. Details in [Advanced semantics](ADVANCED.md#construction-and-the-prefetch-model).
-* `cleanupTimeout` – _optional_ – a millisecond cap on how long close/abort waits for the source's `.return()` to settle. Defaults to no timeout (await forever), matching `AsyncGenerator`. See [Cancellation](#cancellation).
+* `cleanupTimeout` – _optional_ – a millisecond cap on how long close/abort waits for the source's `.return()` to settle. Must be a finite positive number no larger than `2147483647` (Node's timer maximum; `Infinity` is rejected — *omit* the option for unbounded waiting). Defaults to no timeout (await forever), matching `AsyncGenerator`. See [Cancellation](#cancellation).
 * `ordered` – _optional_ – defaults to `false`. When `true`, results are delivered in source order. For plain-value callbacks concurrency is unchanged — only the yield order; async-generator callbacks, however, run one at a time in ordered mode (`bufferSize` does not increase their concurrency — return a value like an array instead if you need both). See [Ordered mode](ADVANCED.md#ordered-mode).
 * `signal` – _optional_ – an `AbortSignal`. When aborted, the next `iterator.next()` rejects with `signal.reason` exactly once and all later calls resolve `{ done: true, value: undefined }`. See [Cancellation](#cancellation).
 * `errors` – _optional_ – defaults to `'fail-eventually'`. Controls how errors from the callback or the source surface to the consumer. See [Errors](#errors).
@@ -236,7 +236,7 @@ There are two error modes:
 
 ### `'fail-eventually'` (default)
 
-After the first error from the callback or the source, no further items are pulled from the source. Items already in flight continue to drain — their successful values still surface. When the buffer empties, the captured errors are thrown: a single error is thrown directly (identity preserved), two or more are wrapped in an [`AggregateError`](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) (in capture order). Wrap your callback in `try/catch` if you need per-item isolation.
+After the first **captured** error, no further items are pulled from the source. Capture happens when the failed item's result is consumed — with `ordered: true` an error behind earlier items is not captured until it reaches the delivery head, so source pulls and callback dispatches can continue until then (see [Advanced semantics](ADVANCED.md#errors-in-depth)). Items already in flight continue to drain — their successful values still surface. When the buffer empties, the captured errors are thrown: a single error is thrown directly (identity preserved), two or more are wrapped in an [`AggregateError`](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) (in capture order). Wrap your callback in `try/catch` if you need per-item isolation.
 
 ### `'fail-fast'`
 
