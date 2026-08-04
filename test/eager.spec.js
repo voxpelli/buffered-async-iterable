@@ -510,6 +510,39 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
       expectSingleRejectionThenDone(await outcomes, reason);
     });
 
+    it('rejects with the abort reason when the source aborts synchronously from inside its own next()', async () => {
+      // Regression: the abort fires while the consumer is inside admitLanes'
+      // synchronous source pull — after the loop-top abort check but before
+      // the per-pull park exists. The construction-time wake listener fires
+      // exactly once, and resolving a park that does not exist yet is a
+      // no-op, so without the pre-park re-check the consumer parked forever
+      // against this never-settling pull instead of delivering the abort.
+      const ac = new AbortController();
+      const reason = new Error('abort-inside-next');
+
+      let pulls = 0;
+      const source = {
+        [Symbol.asyncIterator] () { return this; },
+        /** @returns {Promise<IteratorResult<number, undefined>>} */
+        next () {
+          pulls += 1;
+          if (pulls === 1) return Promise.resolve(/** @type {IteratorResult<number, undefined>} */ ({ done: false, value: 1 }));
+          ac.abort(reason);
+          return new Promise(() => {});
+        },
+        'return': async () => /** @type {IteratorResult<number, undefined>} */ ({ done: true, value: undefined }),
+      };
+
+      const iterator = bufferedAsyncMap(source, async (/** @type {number} */ item) => item, { bufferSize: 1, ordered: 'eager', signal: ac.signal });
+
+      const first = await iterator.next();
+      first.should.deep.equal({ value: 1 });
+
+      const outcomes = collectNextOutcomes(iterator, 3);
+      await clock.runAllAsync();
+      expectSingleRejectionThenDone(await outcomes, reason);
+    });
+
     it('fans out a callable callback result carrying Symbol.asyncIterator', async () => {
       // The eager dispatch gate shares isAsyncIterable with the non-eager path,
       // so a callable async-iterable fans out here too rather than being

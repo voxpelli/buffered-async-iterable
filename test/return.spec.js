@@ -58,6 +58,45 @@ describe('bufferedAsyncMap() AsyncInterface return()', () => {
     await nextAfterReturn.should.eventually.deep.equal({ done: true, value: undefined });
   });
 
+  it('should not dispatch the callback for a source pull that settles after close', async () => {
+    // A pull already in flight when return() runs has irrevocably consumed
+    // its item, but the closed iterator resolves done forever — dispatching
+    // would start fresh callback work (side effects included) whose result
+    // nothing can deliver. Both non-eager modes drop the item, matching the
+    // eager arm (which pins its own drop in test/eager.spec.js).
+    for (const ordered of [false, true]) {
+      /** @type {PromiseWithResolvers<void>} */
+      const secondPullGate = Promise.withResolvers();
+      let pulls = 0;
+      const callbackSpy = sinon.spy();
+
+      const source = {
+        [Symbol.asyncIterator] () { return this; },
+        /** @returns {Promise<IteratorResult<number, undefined>>} */
+        next () {
+          pulls += 1;
+          return pulls === 1
+            ? Promise.resolve(/** @type {IteratorResult<number, undefined>} */ ({ done: false, value: 1 }))
+            : secondPullGate.promise.then(() => /** @type {IteratorResult<number, undefined>} */ ({ done: false, value: 2 }));
+        },
+        'return': async () => /** @type {IteratorResult<number, undefined>} */ ({ done: true, value: undefined }),
+      };
+
+      const iterator = bufferedAsyncMap(source, async (/** @type {number} */ item) => {
+        callbackSpy(item);
+        return item;
+      }, { bufferSize: 1, ordered });
+
+      await iterator.next(); // deliver item 1; the refill starts pull #2
+      await iterator.return(); // close while pull #2 is still in flight
+      secondPullGate.resolve(); // now let pull #2 settle with item 2
+      await clock.tickAsync(0);
+
+      pulls.should.equal(2, `ordered: ${ordered} — pull #2 must have been in flight for the drop to be exercised`);
+      callbackSpy.should.have.been.calledOnceWithExactly(1);
+    }
+  });
+
   it('should resolve return(value) to { done: true, value } per the iterator protocol', async () => {
     const iterator = bufferedAsyncMap(baseAsyncIterable, async (item) => item);
 

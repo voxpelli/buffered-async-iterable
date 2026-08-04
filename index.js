@@ -828,6 +828,18 @@ export function bufferedAsyncMap (input, callback, options) {
             return terminalEnvelope(bufferPromise, /* fromSubIterator */ false, stepErr);
           }
 
+          // The source pull can settle AFTER an explicit close: the iterator
+          // resolves done forever, so an envelope minted here is delivered to
+          // nobody — dispatching would start fresh callback work (side
+          // effects included) whose outcome silently vanishes. Drop the item
+          // instead, matching the eager arm (admitOneLane's isDone guard):
+          // no NEW work starts after close. Draining is unaffected — a
+          // fail-eventually capture does not set isDone, so in-flight pulls
+          // still dispatch and their values still surface during the drain.
+          if (isDone) {
+            return terminalEnvelope(bufferPromise, /* fromSubIterator */ false);
+          }
+
           // The dispatch sits inside the try so a synchronously-throwing
           // plain (non-async) callback becomes the same {err} envelope as a
           // rejecting one — otherwise it would reject the raw bufferPromise,
@@ -1397,6 +1409,27 @@ export function bufferedAsyncMap (input, callback, options) {
         }
       }
 
+      // Foreign synchronous code has run since the loop-top checks — the
+      // source's .next() via admitLanes, a lane iterator's .next() via
+      // pumpLane — and may have aborted or closed the iterator from inside
+      // that call. The construction-time wake listener fires exactly once,
+      // and resolving a park that does not exist yet is a no-op, so parking
+      // now would sleep through a wake that already happened (a permanent
+      // hang when the pending step never settles). Re-check both exits
+      // before parking; only our own synchronous code runs from here to the
+      // race, so the wake cannot be lost again.
+      if (abortReason) return deliverAbort();
+      if (isDone) return markAsEnded();
+
+      const { pending } = head;
+      // Always defined here (see the note above) — fail loud rather than
+      // busy-loop on a resolved-instantly race if that invariant ever
+      // breaks. Checked before the park is minted so the throw cannot
+      // strand a live currentPark for the once-only wake listener to
+      // consume.
+      /* c8 ignore next */
+      if (!pending) throw new Error('bufferedAsyncMap: eager head lane has no in-flight event to await');
+
       // Park on the head's in-flight event: the placeholder's dispatch (head
       // not yet dispatched) or a lane step (the pumpLane above guarantees
       // one), so there is always something to race the park against. A fresh
@@ -1404,11 +1437,6 @@ export function bufferedAsyncMap (input, callback, options) {
       // resolves it via the single construction-time listener.
       /** @type {Promise<typeof ABORT_SENTINEL>} */
       const parkPromise = new Promise(resolve => { currentPark = { resolve }; });
-      const { pending } = head;
-      // Always defined here (see the note above) — fail loud rather than
-      // busy-loop on a resolved-instantly race if that invariant ever breaks.
-      /* c8 ignore next */
-      if (!pending) throw new Error('bufferedAsyncMap: eager head lane has no in-flight event to await');
       const raced = await Promise.race([pending, parkPromise]);
       currentPark = undefined;
 
