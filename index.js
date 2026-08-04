@@ -1085,7 +1085,11 @@ export function bufferedAsyncMap (input, callback, options) {
    */
   const pumpLane = (lane) => {
     const { iterator } = lane;
-    if (!iterator || lane.done || lane.terminalErr || lane.pending) return;
+    // The isDone guard also covers the re-pump from this function's own .then:
+    // a step resolving after close must not pull an iterator that doCleanup
+    // has already .return()ed (with lookahead > 1 the refill would otherwise
+    // keep stepping a closed sub-iterator until the buffer filled).
+    if (isDone || !iterator || lane.done || lane.terminalErr || lane.pending) return;
     if (lane.buffer.length >= laneLookahead) return;
 
     lane.pending = safeStep(iterator, catchSubStepErr).then(result => {
@@ -1261,72 +1265,81 @@ export function bufferedAsyncMap (input, callback, options) {
    * @returns {Promise<IteratorResult<R>>}
    */
   const nextValueEager = async () => {
-    if (abortReason) return deliverAbort();
+    // Iterative, not self-recursive: advancing past a lane re-enters from the
+    // top via `continue`. A long run of already-settled heads — thousands of
+    // phantom lanes from a big bufferSize over an exhausted source, or of done
+    // lanes from empty-generator callbacks — is walked with no `await` in
+    // between, so recursion here grew the stack by O(bufferSize) frames and
+    // crashed exactly like the pre-loop fillQueue did.
+    while (true) {
+      if (abortReason) return deliverAbort();
 
-    admitLanes();
+      admitLanes();
 
-    const head = lanes[0];
+      const head = lanes[0];
 
-    // No lanes and the source is drained → close, surfacing any captured
-    // fail-eventually errors for the first closer.
-    if (!head) return markAsEnded(true);
-    if (isDone) return markAsEnded();
+      // No lanes and the source is drained → close, surfacing any captured
+      // fail-eventually errors for the first closer.
+      if (!head) return markAsEnded(true);
+      if (isDone) return markAsEnded();
 
-    if (head.dispatched) {
-      // A placeholder whose source pull resolved to done: drop and advance.
-      if (head.phantom) {
-        lanes.shift();
-        return nextValueEager();
-      }
+      if (head.dispatched) {
+        // A placeholder whose source pull resolved to done: drop and advance.
+        if (head.phantom) {
+          lanes.shift();
+          continue;
+        }
 
-      // Head has a buffered value → deliver it (the in-order guarantee), resume
-      // stepping the head, and top up admission.
-      if (head.buffer.length > 0) {
-        const value = /** @type {R} */ (head.buffer.shift());
+        // Head has a buffered value → deliver it (the in-order guarantee),
+        // resume stepping the head, and top up admission.
+        if (head.buffer.length > 0) {
+          const value = /** @type {R} */ (head.buffer.shift());
+          pumpLane(head);
+          admitLanes();
+          return /** @type {IteratorYieldResult<R>} */ ({ value });
+        }
+
+        // Head drained of buffered values and terminally errored → surface in
+        // source order (fail-fast throws; fail-eventually captures, continues).
+        if (head.terminalErr) {
+          const err = head.terminalErr;
+          lanes.shift();
+          // No admission after this: handleStreamError leaves either a
+          // captured error or a pending abort behind, and admitLanes refuses
+          // both — the remaining lanes drain, mirroring fillQueue's stop.
+          await handleStreamError(err);
+          // `true` = drain: surface any captured fail-eventually errors.
+          if (lanes.length === 0 && !abortReason) return markAsEnded(true);
+          continue;
+        }
+
+        // Head fully consumed → drop and advance.
+        if (head.done) {
+          lanes.shift();
+          continue;
+        }
+
+        // Generator head with an empty buffer → make sure a step is in flight.
         pumpLane(head);
-        admitLanes();
-        return /** @type {IteratorYieldResult<R>} */ ({ value });
       }
 
-      // Head drained of buffered values and terminally errored → surface in
-      // source order (fail-fast throws; fail-eventually captures and continues).
-      if (head.terminalErr) {
-        const err = head.terminalErr;
-        lanes.shift();
-        await handleStreamError(err);
-        admitLanes();
-        return (lanes.length === 0 && !abortReason) ? markAsEnded(true) : nextValueEager();
-      }
+      // Park on the head's in-flight event: the placeholder's dispatch (head
+      // not yet dispatched) or a lane step (the pumpLane above guarantees
+      // one), so there is always something to race the park against. A fresh
+      // per-pull park keeps retention at ~0 (the memory invariant); abort
+      // resolves it via the single construction-time listener.
+      /** @type {Promise<typeof ABORT_SENTINEL>} */
+      const parkPromise = new Promise(resolve => { currentPark = { resolve }; });
+      const { pending } = head;
+      // Always defined here (see the note above) — fail loud rather than
+      // busy-loop on a resolved-instantly race if that invariant ever breaks.
+      /* c8 ignore next */
+      if (!pending) throw new Error('bufferedAsyncMap: eager head lane has no in-flight event to await');
+      const raced = await Promise.race([pending, parkPromise]);
+      currentPark = undefined;
 
-      // Head fully consumed → drop and advance.
-      if (head.done) {
-        lanes.shift();
-        admitLanes();
-        return nextValueEager();
-      }
-
-      // Generator head with an empty buffer → make sure a step is in flight.
-      pumpLane(head);
+      if (raced === ABORT_SENTINEL || abortReason) return deliverAbort();
     }
-
-    // Park on the head's in-flight event: the placeholder's dispatch (head not
-    // yet dispatched) or a lane step (the pumpLane above guarantees one), so
-    // there is always something to race the park against. A fresh per-pull park
-    // keeps retention at ~0 (the memory invariant); abort resolves it via the
-    // single construction-time listener.
-    /** @type {Promise<typeof ABORT_SENTINEL>} */
-    const parkPromise = new Promise(resolve => { currentPark = { resolve }; });
-    const { pending } = head;
-    // Always defined here (see the note above) — fail loud rather than busy-loop
-    // on a resolved-instantly race if that invariant is ever broken.
-    /* c8 ignore next */
-    if (!pending) throw new Error('bufferedAsyncMap: eager head lane has no in-flight event to await');
-    const raced = await Promise.race([pending, parkPromise]);
-    currentPark = undefined;
-
-    if (raced === ABORT_SENTINEL || abortReason) return deliverAbort();
-
-    return nextValueEager();
   };
 
   /** @type {Promise<IteratorResult<R>>} */

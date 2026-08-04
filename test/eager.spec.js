@@ -6,6 +6,7 @@ import {
   mergeIterables,
 } from '../index.js';
 import {
+  callableAsyncIterable,
   collectNextOutcomes,
   expectSingleRejectionThenDone,
   promisableTimeout,
@@ -58,18 +59,6 @@ function unboundedNonHeadIterator (stepSpy, lookahead) {
 
   return bufferedAsyncMap([0, 1], callback, { bufferSize: 6, ordered: 'eager', ...(lookahead === undefined ? {} : { lookahead }) });
 }
-
-/**
- * A *function* object carrying a callable Symbol.asyncIterator — spec-legal as
- * an async iterable, since ECMA "Type(x) is Object" includes callables.
- *
- * @type {*}
- */
-const callableAsyncIterable = () => 'never invoked as a function';
-callableAsyncIterable[Symbol.asyncIterator] = async function * () {
-  yield 'a';
-  yield 'b';
-};
 
 // ─────────────────────────────────────────────────────────────────────────
 // `ordered: 'eager'` — concurrent callback dispatch with in-order delivery
@@ -271,6 +260,55 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
 
       // Every lane that was admitted ran its finally exactly once.
       cleaned.should.have.members([0, 1, 2, 3, 4, 5]);
+    });
+
+    it('walks long phantom- and done-lane chains without growing the stack', async () => {
+      // Regression: nextValueEager used to self-recurse per settled head lane —
+      // a large bufferSize over an exhausted source (all-phantom heads), or
+      // empty-generator callbacks (all-done heads), overflowed the stack at
+      // bufferSize ≈6000 (the fillQueue bug class, on the consumer side).
+      const emptySource = bufferedAsyncMap([], async (/** @type {number} */ x) => x, { bufferSize: 10_000, ordered: 'eager' });
+      const emptyFlow = (async () => emptySource.next())();
+      await clock.runAllAsync();
+      const emptyResult = await emptyFlow;
+      emptyResult.should.deep.equal({ done: true, value: undefined });
+
+      const items = Array.from({ length: 10_000 }, (_, i) => i);
+      const doneLanes = bufferedAsyncMap(items, async function * () {}, { bufferSize: 10_000, ordered: 'eager' });
+      const doneFlow = (async () => doneLanes.next())();
+      await clock.runAllAsync();
+      const doneResult = await doneFlow;
+      doneResult.should.deep.equal({ done: true, value: undefined });
+    });
+
+    it('does not pull a sub-iterator again once the consumer has closed (lookahead > 1)', async () => {
+      // Regression: with lookahead > 1, a lane step resolving after return()
+      // re-entered pumpLane, which kept refilling toward the lookahead bound —
+      // calling next() on a sub-iterator cleanup had already .return()ed.
+      let nextCallsAfterClose = 0;
+      let closed = false;
+
+      const iterator = bufferedAsyncMap([0], () => /** @type {*} */ ({
+        [Symbol.asyncIterator]: () => ({
+          async next () {
+            if (closed) nextCallsAfterClose++;
+            await promisableTimeout(20);
+            return { done: false, value: 'x' };
+          },
+          'return': async () => ({ done: true, value: undefined }),
+        }),
+      }), { bufferSize: 1, ordered: 'eager', lookahead: 2 });
+
+      await clock.tickAsync(5); // dispatch done; first sub next() in flight
+
+      const flow = (async () => {
+        await iterator.return?.(); // close while that step is pending
+        closed = true;
+      })();
+      await clock.runAllAsync();
+      await flow;
+
+      nextCallsAfterClose.should.equal(0);
     });
 
     it('does not strand a sub-iterator whose source pull lands after close', async () => {
