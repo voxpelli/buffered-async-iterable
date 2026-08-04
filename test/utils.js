@@ -34,6 +34,33 @@ export function stubAsyncIterator () {
 export { makeIterableAsync as fromArray } from '../lib/misc.js';
 
 /**
+ * The shared throwing-source shape for the two error-mode suites — kept single
+ * so fail-fast and fail-eventually keep exercising the same stream.
+ *
+ * @param {Error} expected
+ * @returns {AsyncIterable<number>}
+ */
+export async function * sourceThatThrows (expected) {
+  yield 0;
+  yield 1;
+  throw expected;
+}
+
+/**
+ * A *function* object carrying a callable Symbol.asyncIterator — spec-legal as
+ * an async iterable, since ECMA "Type(x) is Object" includes callables. Pins
+ * the isSpecObject-based fan-out contract from both the hostile-input and the
+ * eager-delivery direction.
+ *
+ * @type {*}
+ */
+export const callableAsyncIterable = () => 'never invoked as a function';
+callableAsyncIterable[Symbol.asyncIterator] = async function * () {
+  yield 'a';
+  yield 'b';
+};
+
+/**
  * The fail-eventually drain-throw convention: a single captured error is
  * thrown identity-preserved, two or more arrive wrapped in an
  * AggregateError — unwrap to the first for identity assertions. Typed as

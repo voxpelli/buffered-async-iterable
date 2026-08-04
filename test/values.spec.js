@@ -985,9 +985,7 @@ describe('bufferedAsyncMap() values', () => {
     await clock.runAllAsync();
     const outcome = await promisedResult;
 
-    const captured = outcome.rejectedWith instanceof AggregateError
-      ? outcome.rejectedWith.errors[0]
-      : outcome.rejectedWith;
+    const captured = unwrapCapturedError(outcome.rejectedWith);
     captured.should.equal(malformedError);
   });
 
