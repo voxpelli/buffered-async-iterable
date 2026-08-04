@@ -237,7 +237,7 @@ There are two error modes:
 
 ### `'fail-eventually'` (default)
 
-After the first **captured** error, no further items are pulled from the source. Capture happens when the failed item's result is consumed — with `ordered: true` an error behind earlier items is not captured until it reaches the delivery head, so source pulls and callback dispatches can continue until then (see [Advanced semantics](ADVANCED.md#errors-in-depth)). Items already in flight continue to drain — their successful values still surface. When the buffer empties, the captured errors are thrown: a single error is thrown directly (identity preserved), two or more are wrapped in an [`AggregateError`](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) (in capture order). Wrap your callback in `try/catch` if you need per-item isolation.
+After the first **captured** error, no further items are pulled from the source. Capture happens when the failed item's result is consumed — in both ordered modes (`ordered: true` and `ordered: 'eager'`) an error behind earlier items is not captured until it reaches the delivery head, so source pulls and callback dispatches can continue until then (see [Advanced semantics](ADVANCED.md#errors-in-depth)). Items already in flight continue to drain — their successful values still surface. When the buffer empties, the captured errors are thrown: a single error is thrown directly (identity preserved), two or more are wrapped in an [`AggregateError`](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) (in capture order). Wrap your callback in `try/catch` if you need per-item isolation.
 
 ### `'fail-fast'`
 
