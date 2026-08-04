@@ -119,17 +119,24 @@ a connection pool) for longer — can delay the head's sustained throughput unde
 contention. `lookahead` is only accepted with `ordered: 'eager'` (it throws
 otherwise); for controlling contention, reach for `bufferSize` instead.
 
-**At `lookahead: 1` a spread-cost generator gets nothing from `bufferSize`.** The
-default suits work that happens *before* the first yield; when the cost instead
-falls *between* the yields, each non-head lane runs exactly one value ahead and
-then parks until it reaches the head, so the per-item work after the first yield
-is paid serially at the head and raising `bufferSize` changes nothing — the mode
-performs like `ordered: true`, and the shortfall grows with the `bufferSize` you
-asked for. Treat `bufferSize × lookahead` as a memory budget in values and raise
-`lookahead` deliberately to spend that budget on inter-yield concurrency. That
-budget is a genuine ceiling: for a very-long or unbounded spread-cost generator
-no `lookahead` both bounds memory *and* recovers full concurrency, so where
-out-of-order delivery is acceptable reach for `ordered: false` there instead.
+**At `lookahead: 1` only the work up to each first yield parallelises.** Every
+lane is stepped once as it is admitted, so per-item work *before* the first yield
+runs concurrently across `bufferSize` lanes — the shape the default is chosen
+for. Work *after* the first yield behaves differently: a non-head lane runs one
+value ahead and then parks until it reaches the head, so that part is paid
+serially at the head and raising `bufferSize` does not speed it up.
+
+A generator whose cost is spread across its yields therefore lands in between —
+faster than `ordered: true`, because its first page still fans out, but flat in
+`bufferSize`. Measured on 8 items × 2 pages × 40 ms: `ordered: true` 652 ms;
+eager at `lookahead: 1` 365 ms at `bufferSize` 2, 6 and 12 alike. In the limiting
+case where the first yield is free and *all* cost falls between yields, eager at
+`lookahead: 1` matches `ordered: true` exactly (324 ms either way). Raise
+`lookahead` to spend memory on that inter-yield concurrency, treating
+`bufferSize × lookahead` as a budget in values. The budget is a real ceiling: for
+a very-long or unbounded spread-cost generator no `lookahead` both bounds memory
+*and* recovers full concurrency, so where out-of-order delivery is acceptable
+reach for `ordered: false` there instead.
 
 Ordering, abort delivery, and both error modes are observably identical to
 `ordered: true`. In particular a `fail-fast` error surfaces in source order —

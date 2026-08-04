@@ -273,6 +273,36 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
       cleaned.should.have.members([0, 1, 2, 3, 4, 5]);
     });
 
+    it('does not strand a sub-iterator whose source pull lands after close', async () => {
+      /** @type {number[]} */
+      const started = [];
+      /** @type {number[]} */
+      const finalized = [];
+
+      // A slow source keeps pulls in flight past the close, so their dispatch
+      // handlers run after doCleanup has already emptied `lanes`. Anything
+      // spawned there is unreachable by cleanup — it must not be spawned.
+      const iterator = bufferedAsyncMap(yieldValuesOverTime(3, () => 30), async function * (item) {
+        started.push(item);
+        try {
+          await promisableTimeout(10);
+          yield item;
+        } finally {
+          finalized.push(item);
+        }
+      }, { bufferSize: 3, ordered: 'eager' });
+
+      const flow = (async () => {
+        await iterator.next();
+        await iterator.return?.();
+      })();
+
+      await clock.runAllAsync();
+      await flow;
+
+      finalized.should.deep.equal(started); // every started generator ran its finally
+    });
+
     it('returns a non-head lane still holding buffered values on early close (lookahead > 1)', async () => {
       const stepSpy = sinon.spy();
       /** @type {number[]} */

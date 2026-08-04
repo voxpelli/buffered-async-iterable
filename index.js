@@ -1168,6 +1168,19 @@ export function bufferedAsyncMap (input, callback, options) {
         return lane;
       }
 
+      // The source pull can settle AFTER an explicit close: doCleanup has
+      // already run and emptied `lanes`, so a sub-iterator built from here
+      // would never be reached by cleanup and its `finally` would never run.
+      // Drop the item instead of dispatching — matching the non-eager modes,
+      // which only ever materialise a sub-iterator inside a `nextValue` that
+      // is itself guarded by `isDone`.
+      if (isDone) {
+        lane.dispatched = true;
+        lane.done = true;
+        lane.pending = undefined;
+        return lane;
+      }
+
       try {
         // eslint-disable-next-line promise/no-callback-in-promise
         const callbackResult = callback(/** @type {T} */ (value), { signal: internalAbortController.signal });
@@ -1196,6 +1209,17 @@ export function bufferedAsyncMap (input, callback, options) {
         // the lane's first step as the new `pending`.
         lane.pending = undefined;
         if (subIterator) {
+          // Closed while the callback was in flight: cleanup has already walked
+          // the lanes, so close this one here instead of leaking it. Rejections
+          // are swallowed for the same reason doCleanup swallows them — a broken
+          // cleanup must not mask the consumer-facing outcome.
+          if (isDone) {
+            lane.done = true;
+            // allSettled never rejects, so awaiting it cannot throw here and
+            // leaves no floating promise behind.
+            await Promise.allSettled([subIterator.return?.()]);
+            return lane;
+          }
           lane.iterator = subIterator;
           pumpLane(lane); // start stepping toward the first yield, concurrently
         } else {
