@@ -1360,10 +1360,16 @@ export function bufferedAsyncMap (input, callback, options) {
         // During a fail-eventually drain pumpLane starts nothing new, so a
         // head with nothing buffered and nothing in flight has surfaced all
         // the work that was dispatched before the capture — forfeit its
-        // remaining (never-started) values, exactly as ordered: true cuts a
-        // generator off once fillQueue stops. Without this the park below
-        // would wait on a step that can no longer exist.
+        // remaining (never-started) values, as ordered: true does once
+        // fillQueue stops. Forfeiting VALUES is not forfeiting CLEANUP:
+        // ordered mode's generator stays in subIterators so doCleanup still
+        // .return()s it, and this lane's live iterator must reach cleanup the
+        // same way — once shifted, the lane is invisible to doCleanup's
+        // `lanes` sweep, and a generator holding resources in a `finally`
+        // would leak them. Without the shift the park below would wait on a
+        // step that can no longer exist.
         if (!head.pending && capturedErrors.length > 0) {
+          if (head.iterator) recordPendingClose(head.iterator);
           lanes.shift();
           continue;
         }

@@ -293,15 +293,21 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
       // drains, and nothing further is ever stepped. Pre-fix the lane was
       // pumped to exhaustion, delivering values ordered: true never would.
       const boom = new Error('boom');
+      /** @type {number[]} */
+      const finalized = [];
 
       const iterator = bufferedAsyncMap([0, 1], async function * (item) {
         if (item === 0) throw boom;
-        await promisableTimeout(30);
-        yield 'g1';
-        await promisableTimeout(30);
-        yield 'g2';
-        await promisableTimeout(30);
-        yield 'g3';
+        try {
+          await promisableTimeout(30);
+          yield 'g1';
+          await promisableTimeout(30);
+          yield 'g2';
+          await promisableTimeout(30);
+          yield 'g3';
+        } finally {
+          finalized.push(item);
+        }
       }, { bufferSize: 6, ordered: 'eager', errors: 'fail-eventually' });
 
       const flow = collectNextOutcomes(iterator, 4);
@@ -311,6 +317,9 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
       deliveredValues(outcomes).should.deep.equal(['g1']); // in-flight step only
       const rejection = outcomes.find(o => o.rejected);
       unwrapCapturedError(rejection?.value).should.equal(boom);
+      // Forfeiting the lane's remaining values must NOT forfeit its cleanup:
+      // the live iterator is handed to pendingCloses, so its finally runs.
+      finalized.should.deep.equal([1]);
     });
 
     it('starts no new lane steps once an external abort is pending', async () => {
@@ -335,8 +344,8 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
       }), { bufferSize: 1, ordered: 'eager', lookahead: 5, signal: ac.signal });
 
       await clock.tickAsync(5); // first lane step in flight
+      aborted = true;           // set BEFORE the abort: listeners run synchronously
       ac.abort(reason);
-      aborted = true;
 
       await clock.tickAsync(100); // in-flight step lands; refill must refuse
 
@@ -367,9 +376,11 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
 
       await clock.tickAsync(5); // dispatch done; first sub next() in flight
 
+      // Set BEFORE the close: return() closes synchronously, and the whole
+      // cleanup window — exactly the re-pump window under test — must count.
+      closed = true;
       const flow = (async () => {
         await iterator.return?.(); // close while that step is pending
-        closed = true;
       })();
       await clock.runAllAsync();
       await flow;
@@ -404,7 +415,7 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
       await clock.runAllAsync();
       await flow;
 
-      finalized.should.deep.equal(started); // every started generator ran its finally
+      finalized.should.have.members(started); // every started generator ran its finally
     });
 
     it('closes a sub-iterator that only materialised after the consumer closed', async () => {
