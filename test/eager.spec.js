@@ -303,6 +303,37 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
       finalized.should.deep.equal(started); // every started generator ran its finally
     });
 
+    it('closes a sub-iterator that only materialised after the consumer closed', async () => {
+      const returnSpy = sinon.stub().resolves({ done: true, value: undefined });
+      const inner = {
+        [Symbol.asyncIterator]: () => ({
+          next: async () => ({ done: false, value: 'x' }),
+          'return': returnSpy,
+        }),
+      };
+      // Async-iterable at dispatch (so it is treated as a sub-iterable) but
+      // resolving LATE to a different async iterable — the only shape that
+      // leaves a real await gap between dispatch and the sub-iterator existing.
+      const hybrid = {
+        async * [Symbol.asyncIterator] () { yield 'never-seen'; },
+        /** @param {(v: unknown) => void} resolve */
+        // eslint-disable-next-line unicorn/no-thenable
+        then (resolve) { setTimeout(() => resolve(inner), 50); },
+      };
+
+      const iterator = bufferedAsyncMap(['a'], () => hybrid, { bufferSize: 1, ordered: 'eager' });
+
+      await clock.tickAsync(1); // dispatch happens; the callback result is still pending
+      const flow = (async () => {
+        await iterator.return?.(); // close while it is pending
+      })();
+
+      await clock.runAllAsync();
+      await flow;
+
+      returnSpy.callCount.should.equal(1); // closed here, not leaked
+    });
+
     it('returns a non-head lane still holding buffered values on early close (lookahead > 1)', async () => {
       const stepSpy = sinon.spy();
       /** @type {number[]} */
