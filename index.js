@@ -1085,11 +1085,16 @@ export function bufferedAsyncMap (input, callback, options) {
    */
   const pumpLane = (lane) => {
     const { iterator } = lane;
-    // The isDone guard also covers the re-pump from this function's own .then:
-    // a step resolving after close must not pull an iterator that doCleanup
-    // has already .return()ed (with lookahead > 1 the refill would otherwise
-    // keep stepping a closed sub-iterator until the buffer filled).
-    if (isDone || !iterator || lane.done || lane.terminalErr || lane.pending) return;
+    // The isDone/abortReason guards also cover the re-pump from this
+    // function's own .then. isDone: a step resolving after close must not
+    // pull an iterator that doCleanup has already .return()ed. abortReason:
+    // an abort not yet delivered (isDone flips only on the delivering pull)
+    // must already stop new steps — matching fillQueue, which never starts
+    // work after an abort is pending. No capturedErrors gate, deliberately:
+    // a captured fail-eventually error only surfaces when its envelope is
+    // raced, so ordered: true keeps stepping the live generator after a
+    // capture and eager must too (observable-parity contract).
+    if (isDone || abortReason || !iterator || lane.done || lane.terminalErr || lane.pending) return;
     if (lane.buffer.length >= laneLookahead) return;
 
     lane.pending = safeStep(iterator, catchSubStepErr).then(result => {

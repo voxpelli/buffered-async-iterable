@@ -281,6 +281,40 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
       doneResult.should.deep.equal({ done: true, value: undefined });
     });
 
+    it('starts no new lane steps once an external abort is pending', async () => {
+      // Regression: pumpLane gated on isDone but not abortReason — between an
+      // external abort and its delivery on the next pull, refill chains kept
+      // issuing fresh sub-iterator next() calls until buffers hit lookahead.
+      // fillQueue never starts work after a pending abort; neither may lanes.
+      const ac = new AbortController();
+      const reason = new Error('stop');
+      let aborted = false;
+      let pullsAfterAbort = 0;
+
+      const iterator = bufferedAsyncMap([0], () => /** @type {*} */ ({
+        [Symbol.asyncIterator]: () => ({
+          async next () {
+            if (aborted) pullsAfterAbort++;
+            await promisableTimeout(15);
+            return { done: false, value: 'x' };
+          },
+          'return': async () => ({ done: true, value: undefined }),
+        }),
+      }), { bufferSize: 1, ordered: 'eager', lookahead: 5, signal: ac.signal });
+
+      await clock.tickAsync(5); // first lane step in flight
+      ac.abort(reason);
+      aborted = true;
+
+      await clock.tickAsync(100); // in-flight step lands; refill must refuse
+
+      pullsAfterAbort.should.equal(0);
+
+      const outcomes = collectNextOutcomes(iterator, 2);
+      await clock.runAllAsync();
+      expectSingleRejectionThenDone(await outcomes, reason);
+    });
+
     it('does not pull a sub-iterator again once the consumer has closed (lookahead > 1)', async () => {
       // Regression: with lookahead > 1, a lane step resolving after return()
       // re-entered pumpLane, which kept refilling toward the lookahead bound —
