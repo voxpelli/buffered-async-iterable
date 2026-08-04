@@ -61,16 +61,19 @@ describe('bufferedAsyncMap() errors', () => {
 
     /** @type {Error | undefined} */
     let caught;
-    try {
-      // eslint-disable-next-line no-unused-vars
-      for await (const _ of bufferedAsyncMap(fromArray([0, 1, 2]), callback, { bufferSize: 3 })) {
-        // drain
+    const flow = (async () => {
+      try {
+        // eslint-disable-next-line no-unused-vars
+        for await (const _ of bufferedAsyncMap(fromArray([0, 1, 2]), callback, { bufferSize: 3 })) {
+          // drain
+        }
+      } catch (err) {
+        caught = /** @type {Error} */ (err);
       }
-    } catch (err) {
-      caught = /** @type {Error} */ (err);
-    }
+    })();
 
     await clock.runAllAsync();
+    await flow;
 
     chai.expect(caught).to.be.instanceOf(AggregateError);
     /** @type {AggregateError} */ (caught).errors.should.deep.equal([errA, errB]);
@@ -85,16 +88,19 @@ describe('bufferedAsyncMap() errors', () => {
 
     /** @type {Error | undefined} */
     let caught;
-    try {
-      // eslint-disable-next-line no-unused-vars
-      for await (const _ of bufferedAsyncMap(sourceThatThrows(sourceError), callback, { bufferSize: 3 })) {
-        // drain
+    const flow = (async () => {
+      try {
+        // eslint-disable-next-line no-unused-vars
+        for await (const _ of bufferedAsyncMap(sourceThatThrows(sourceError), callback, { bufferSize: 3 })) {
+          // drain
+        }
+      } catch (err) {
+        caught = /** @type {Error} */ (err);
       }
-    } catch (err) {
-      caught = /** @type {Error} */ (err);
-    }
+    })();
 
     await clock.runAllAsync();
+    await flow;
 
     chai.expect(caught).to.be.instanceOf(AggregateError);
     const { errors } = /** @type {AggregateError} */ (caught);
@@ -129,15 +135,18 @@ describe('bufferedAsyncMap() errors', () => {
     /** @type {Error | undefined} */
     let caught;
 
-    try {
-      for await (const v of bufferedAsyncMap(fromArray([0, 1, 2]), callback, { bufferSize: 1 })) {
-        delivered.push(v);
+    const flow = (async () => {
+      try {
+        for await (const v of bufferedAsyncMap(fromArray([0, 1, 2]), callback, { bufferSize: 1 })) {
+          delivered.push(v);
+        }
+      } catch (err) {
+        caught = /** @type {Error} */ (err);
       }
-    } catch (err) {
-      caught = /** @type {Error} */ (err);
-    }
+    })();
 
     await clock.runAllAsync();
+    await flow;
 
     delivered.should.deep.equal([0, 1]);
     chai.expect(caught).to.equal(rejectionError);
