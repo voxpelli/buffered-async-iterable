@@ -32,6 +32,13 @@ describe('bufferedAsyncMap() basic', () => {
       // @ts-ignore
       bufferedAsyncMap('abc');
     }, TypeError, 'Expected asyncIterable to not be a string — spread it first if iterating characters is intended');
+
+    // The empty string is falsy but still a string — it must get the
+    // string-specific steer, not the generic "no input" message.
+    should.Throw(() => {
+      // @ts-ignore
+      bufferedAsyncMap('');
+    }, TypeError, 'Expected asyncIterable to not be a string — spread it first if iterating characters is intended');
   });
 
   it('should throw when provided callback is not a function', () => {

@@ -20,6 +20,15 @@ const ERR = Symbol('bufferedAsyncMap error');
 // can override it with the `lookahead` option (eager mode only).
 const DEFAULT_LANE_LOOKAHEAD = 1;
 
+// The catch-envelope brand: only objects minted by the two catch handlers
+// below are internal. The symbol alone is spoofable — a Proxy get-trap can
+// answer ANY key, including a private symbol, with a same-realm Error — so
+// membership here is the authoritative check; the ERR read on a confirmed
+// member is then a safe own-property read. WeakSet, so envelopes stay
+// collectable once their slot settles.
+/** @type {WeakSet<object>} */
+const errEnvelopes = new WeakSet();
+
 // Hoisted rejection-normalizers for safeStep — module-level so the hot pull
 // path allocates zero catch closures per slot (they close over nothing but
 // module scope).
@@ -28,13 +37,21 @@ const DEFAULT_LANE_LOOKAHEAD = 1;
  * @param {unknown} err
  * @returns {{ [ERR]: Error }}
  */
-const catchSubStepErr = (err) => ({ [ERR]: normalizeError(err, 'Unknown subiterator error') });
+const catchSubStepErr = (err) => {
+  const envelope = { [ERR]: normalizeError(err, 'Unknown subiterator error') };
+  errEnvelopes.add(envelope);
+  return envelope;
+};
 
 /**
  * @param {unknown} err
  * @returns {{ [ERR]: Error }}
  */
-const catchMainStepErr = (err) => ({ [ERR]: normalizeError(err, 'Unknown iterator error') });
+const catchMainStepErr = (err) => {
+  const envelope = { [ERR]: normalizeError(err, 'Unknown iterator error') };
+  errEnvelopes.add(envelope);
+  return envelope;
+};
 
 /**
  * One pull step that can never reject: a synchronously-throwing `.next()`
@@ -57,6 +74,35 @@ const safeStep = (iterator, onNextError) => {
     step = Promise.reject(err);
   }
   return Promise.resolve(step).catch(onNextError);
+};
+
+/**
+ * GetMethod re-read of a settled callback result: a single [[Get]] of the
+ * member (no `in` probe — a has-trap is never consulted, matching for-await).
+ * Re-read after the await rather than trusting dispatch time, because `await
+ * callbackResult` can resolve to something other than the iterable that was
+ * dispatched (a thenable-hybrid). A callable member fans out; a nullish or
+ * non-callable member means the resolved value is plain data (returns
+ * undefined). The read and the call are foreign operations — a throw
+ * propagates for the caller to surface as a stream error, and a callable
+ * member returning a non-object is the same protocol violation it is for
+ * for-await. The ONE shared implementation for every dispatch mode — the
+ * eager lane path must never drift from this fan-out.
+ *
+ * @template R
+ * @param {unknown} resolved
+ * @returns {AsyncIterator<R, void, void> | undefined}
+ */
+const subIteratorFromResolved = (resolved) => {
+  const method = isSpecObject(resolved)
+    ? /** @type {{ [Symbol.asyncIterator]?: unknown }} */ (resolved)[Symbol.asyncIterator]
+    : undefined;
+  if (typeof method !== 'function') return;
+  const candidate = method.call(resolved);
+  if (!isSpecObject(candidate)) {
+    throw new TypeError('Expected the callback result Symbol.asyncIterator method to return an object');
+  }
+  return /** @type {AsyncIterator<R, void, void>} */ (candidate);
 };
 
 /**
@@ -106,6 +152,10 @@ async function * yieldIterable (item) {
  * is read once here and re-read at iteration, so elements with exotic
  * one-shot getter members are unsupported — deliberately stricter than the
  * main input, whose member is captured on a single read and invoked.
+ * Residual deferred case: only *callability* is checked here — invoking the
+ * member at validation time would be a construction-time side effect — so an
+ * element whose callable member then returns a non-object still surfaces as
+ * the deferred consume-time TypeError this validation otherwise prevents.
  *
  * @template T
  * @param {Array<AsyncIterable<T> | (Iterable<T> & object) | T[]>} input array of (async) iterables to merge — validated eagerly, string elements rejected
@@ -212,8 +262,10 @@ export function bufferedAsyncMap (input, callback, options) {
   } = options || {};
 
   // The falsy-input guard must precede the member reads below (reading a
-  // symbol off null would throw unbranded).
-  if (!input) throw new TypeError('Expected input to be provided');
+  // symbol off null would throw unbranded). Strings are exempted so the
+  // empty string reaches the string-specific rejection below instead of
+  // masquerading as "no input".
+  if (!input && typeof input !== 'string') throw new TypeError('Expected input to be provided');
 
   // GetMethod semantics, matching for-await's GetIterator(async) exactly:
   // ONE [[Get]] of the member (no `in` probe — a Proxy has/get trap pair can
@@ -463,7 +515,7 @@ export function bufferedAsyncMap (input, callback, options) {
     // Wrap as async so a sync-throwing .return getter or body becomes a
     // promise rejection that allSettled can swallow.
     const cleanup = Promise.allSettled(
-      [
+      [...new Set([
         // Ensure the main iterators are completed
         ...(mainReturnedDone ? [] : [asyncIterator]),
         ...subIterators,
@@ -471,8 +523,18 @@ export function bufferedAsyncMap (input, callback, options) {
         // Iterators dropped from the rotation for malformed results but
         // never closed — still owed a .return()
         ...pendingCloses,
-      ]
-        .map(async item => item.return && item.return())
+        // The Set dedupes an iterator reachable through more than one list
+        // (e.g. one shared iterable returned for two items) so its .return()
+        // runs exactly once — the same contract the pendingCloses path pins.
+      ])]
+        .map(async (item) => {
+          // GetMethod: one read of the foreign `return` member, then invoke
+          // the captured method — a stateful getter must not be read twice
+          // (truthy-check-then-reinvoke silently skipped cleanup when the
+          // second read differed).
+          const returnMethod = /** @type {{ 'return'?: unknown }} */ (item).return;
+          return typeof returnMethod === 'function' ? returnMethod.call(item) : undefined;
+        })
     );
 
     // If the caller opted into a cleanup deadline, race it. A source stuck
@@ -663,15 +725,14 @@ export function bufferedAsyncMap (input, callback, options) {
               kind = 1;
               stepErr = new TypeError('Expected sub-iterator next() result to be an object');
             } else {
-              // Read-once + brand-verify: a Proxy has-trap can lie about the
-              // private ERR symbol, so kind 2 additionally requires the
-              // same-realm Error every catch handler attaches (normalizeError
-              // guarantees it). A spoofed tag falls through to the done/value
-              // reads — exactly what native for-await does with that proxy.
-              const maybeErr = ERR in result ? result[ERR] : undefined;
-              if (maybeErr instanceof Error) {
+              // Cheap `in` prefilter, then the WeakSet brand: a Proxy can lie
+              // about the symbol AND answer its [[Get]] with a same-realm
+              // Error, but it can never be a member of the private registry.
+              // A spoofed tag falls through to the done/value reads — exactly
+              // what native for-await does with that proxy.
+              if (ERR in result && errEnvelopes.has(result)) {
                 kind = 2;
-                stepErr = maybeErr;
+                stepErr = /** @type {{ [ERR]: Error }} */ (result)[ERR];
               } else {
                 const step = /** @type {IteratorResult<R, void>} */ (result);
                 if (step.done) {
@@ -719,15 +780,14 @@ export function bufferedAsyncMap (input, callback, options) {
               kind = 1;
               stepErr = new TypeError('Expected source iterator next() result to be an object');
             } else {
-              // Read-once + brand-verify: a Proxy has-trap can lie about the
-              // private ERR symbol, so kind 2 additionally requires the
-              // same-realm Error every catch handler attaches (normalizeError
-              // guarantees it). A spoofed tag falls through to the done/value
-              // reads — exactly what native for-await does with that proxy.
-              const maybeErr = ERR in result ? result[ERR] : undefined;
-              if (maybeErr instanceof Error) {
+              // Cheap `in` prefilter, then the WeakSet brand: a Proxy can lie
+              // about the symbol AND answer its [[Get]] with a same-realm
+              // Error, but it can never be a member of the private registry.
+              // A spoofed tag falls through to the done/value reads — exactly
+              // what native for-await does with that proxy.
+              if (ERR in result && errEnvelopes.has(result)) {
                 kind = 2;
-                stepErr = maybeErr;
+                stepErr = /** @type {{ [ERR]: Error }} */ (result)[ERR];
               } else {
                 const step = /** @type {IteratorResult<T, void>} */ (result);
                 if (step.done) {
@@ -976,25 +1036,7 @@ export function bufferedAsyncMap (input, callback, options) {
       let subIterator;
 
       try {
-        // GetMethod-aligned single [[Get]] (no `in` probe — a has-trap is
-        // never consulted, matching for-await). Re-read here rather than
-        // trusting dispatch time: `await callbackResult` can resolve to
-        // something other than the iterable that was dispatched (a
-        // thenable-hybrid). A callable member fans out; a nullish or
-        // non-callable member means the resolved value is plain data. The
-        // read and the call are foreign operations — a throw surfaces as a
-        // stream error, and a callable member returning a non-object is the
-        // same protocol violation it is for for-await.
-        const method = isSpecObject(value)
-          ? /** @type {{ [Symbol.asyncIterator]?: unknown }} */ (value)[Symbol.asyncIterator]
-          : undefined;
-        if (typeof method === 'function') {
-          const candidate = method.call(value);
-          if (!isSpecObject(candidate)) {
-            throw new TypeError('Expected the callback result Symbol.asyncIterator method to return an object');
-          }
-          subIterator = /** @type {AsyncIterator<R, void, void>} */ (candidate);
-        }
+        subIterator = subIteratorFromResolved(value);
       } catch (subIterableErr) {
         // The callback returned a malformed async iterable — the member
         // read threw, invoking it threw, or it returned a non-object.
@@ -1055,10 +1097,12 @@ export function bufferedAsyncMap (input, callback, options) {
         kind = 1;
         err = new TypeError(malformedMessage);
       } else {
-        const maybeErr = ERR in result ? result[ERR] : undefined;
-        if (maybeErr instanceof Error) {
+        // Same WeakSet brand as the fillOneSlot twins: a Proxy can lie about
+        // the symbol AND answer its [[Get]] with a same-realm Error, but it
+        // can never be a member of the private registry.
+        if (ERR in result && errEnvelopes.has(result)) {
           kind = 2;
-          err = maybeErr;
+          err = /** @type {{ [ERR]: Error }} */ (result)[ERR];
         } else {
           const step = /** @type {IteratorResult<V, void>} */ (result);
           if (step.done) kind = 3;
@@ -1196,22 +1240,9 @@ export function bufferedAsyncMap (input, callback, options) {
         const maybeSub = isAsyncIterable(callbackResult);
         const resolved = await callbackResult;
 
-        /** @type {AsyncIterator<R, void, void> | undefined} */
-        let subIterator;
-        if (maybeSub) {
-          // GetMethod re-read (a thenable-hybrid can resolve to something other
-          // than what was dispatched) — mirrors the non-eager sub-iterator arm.
-          const method = isSpecObject(resolved)
-            ? /** @type {{ [Symbol.asyncIterator]?: unknown }} */ (resolved)[Symbol.asyncIterator]
-            : undefined;
-          if (typeof method === 'function') {
-            const candidate = method.call(resolved);
-            if (!isSpecObject(candidate)) {
-              throw new TypeError('Expected the callback result Symbol.asyncIterator method to return an object');
-            }
-            subIterator = /** @type {AsyncIterator<R, void, void>} */ (candidate);
-          }
-        }
+        // The SAME shared GetMethod re-read the non-eager arm uses — the two
+        // dispatch modes must never drift on fan-out semantics.
+        const subIterator = maybeSub ? subIteratorFromResolved(resolved) : undefined;
 
         lane.dispatched = true;
         // Settle the placeholder promise before pumping so pumpLane can install

@@ -56,6 +56,24 @@ const truthyNonObjectIteratorCallback = () => ({ [Symbol.asyncIterator]: () => 4
  */
 const nonCallableMemberShape = () => ({ [Symbol.asyncIterator]: undefined, tag: 'data' });
 
+/**
+ * An IteratorResult proxy that answers every unknown key — the private ERR
+ * symbol included — with a fresh same-realm Error while forwarding the real
+ * done/value reads. The strongest envelope spoof a foreign result can mount.
+ *
+ * @returns {object}
+ */
+const makeSpoofEnvelope = () => new Proxy({ done: false, value: 'real' }, {
+  has: () => true,
+  get: (t, k) => k in t ? t[/** @type {keyof typeof t} */ (k)] : new Error('spoofed'),
+});
+
+/** @returns {AsyncGenerator<string>} */
+async function * innerPair () {
+  yield 'i1';
+  yield 'i2';
+}
+
 describe('bufferedAsyncMap() hostile iterator results', () => {
   // Envelope pipeline contract: no foreign-object read may reject a buffer
   // slot. Native for-await parity: IteratorComplete/IteratorValue are
@@ -221,6 +239,113 @@ describe('bufferedAsyncMap() hostile iterator results', () => {
     // 'sub-1'; the spoof-proof classification yields the proxied
     // (undefined) value and keeps pulling to the real done.
     seen.should.deep.equal(['sub-1', undefined]);
+  });
+
+  it('is not fooled by a get-trap answering the error tag with a same-realm Error (main arm)', async () => {
+    // Stronger spoof than a lying has-trap alone: the get-trap answers the
+    // private ERR symbol with a genuine Error instance. Pre-fix the
+    // instanceof brand accepted it — the real value was dropped, the
+    // spoofed Error surfaced as a stream error, and (classified as a
+    // protocol-closed rejection) the source was never .return()ed. The
+    // WeakSet brand makes it fall through to the done/value reads, exactly
+    // like native for-await: 'real' is delivered.
+    /** @type {unknown[]} */
+    const seen = [];
+    for await (const value of bufferedAsyncMap(sourceWithHostileResult(1, makeSpoofEnvelope), async (item) => item, { bufferSize: 1 })) {
+      seen.push(value);
+    }
+
+    chai.expect(seen[1]).to.equal('real');
+    seen.length.should.be.greaterThan(2); // iteration continued past the spoof
+  });
+
+  it('is not fooled by a get-trap answering the error tag with a same-realm Error (sub-iterator arm)', async () => {
+    let n = 0;
+    /** @type {(item: string) => AsyncIterable<string>} */
+    const callback = () => ({
+      [Symbol.asyncIterator]: () => ({
+        next: async () => {
+          n += 1;
+          if (n === 1) return /** @type {*} */ (makeSpoofEnvelope());
+          return { done: true, value: undefined };
+        },
+      }),
+    });
+
+    /** @type {unknown[]} */
+    const seen = [];
+    for await (const value of bufferedAsyncMap(['a'], callback, { bufferSize: 1 })) {
+      seen.push(value);
+    }
+
+    seen.should.deep.equal(['real']);
+  });
+
+  it('fans out a callback-result Proxy whose has-trap denies the member the get-trap provides', async () => {
+    // GetMethod consults only [[Get]]; `for await` iterates this proxy. A
+    // dispatch gate probing with `in` (has-trap says no) delivered the raw
+    // proxy as a plain value instead — the gate must classify by [[Get]].
+    const proxy = new Proxy({}, {
+      has: () => false,
+      get: (_t, k) => k === Symbol.asyncIterator ? () => innerPair() : undefined,
+    });
+
+    /** @type {unknown[]} */
+    const seen = [];
+    for await (const value of bufferedAsyncMap(['a'], () => /** @type {*} */ (proxy))) {
+      seen.push(value);
+    }
+
+    seen.should.deep.equal(['i1', 'i2']);
+  });
+
+  it('reads a foreign return member once at cleanup and invokes the captured method', async () => {
+    // A stateful getter (method on the first read, gone on the second) must
+    // still get its cleanup: truthy-check-then-reinvoke read it twice and
+    // silently invoked nothing.
+    let reads = 0;
+    let invoked = 0;
+    const iterator = {
+      next: async () => new Promise(() => {}), // wedged — close happens while open
+      get 'return' () {
+        reads += 1;
+        if (reads === 1) {
+          return async () => {
+            invoked += 1;
+            return { done: true, value: undefined };
+          };
+        }
+      },
+    };
+
+    const buffered = bufferedAsyncMap({ [Symbol.asyncIterator]: () => /** @type {*} */ (iterator) }, async (/** @type {*} */ x) => x, { bufferSize: 1 });
+    const pull = buffered.next().catch(() => {});
+    await promisableTimeout(10);
+    await buffered.return();
+    await pull;
+
+    reads.should.equal(1);
+    invoked.should.equal(1);
+  });
+
+  it('returns a shared iterator exactly once when two items resolve to the same iterable', async () => {
+    let returns = 0;
+    const shared = /** @type {*} */ ({
+      [Symbol.asyncIterator] () { return this; },
+      next: async () => new Promise(() => {}), // never yields
+      'return': async () => {
+        returns += 1;
+        return { done: true, value: undefined };
+      },
+    });
+
+    const iterator = bufferedAsyncMap([0, 1], () => shared, { bufferSize: 2 });
+    const pull = iterator.next().catch(() => {});
+    await promisableTimeout(10);
+    await iterator.return();
+    await pull;
+
+    returns.should.equal(1);
   });
 
   it('accepts a callable IteratorResult, matching for-await (spec Object includes functions)', async () => {

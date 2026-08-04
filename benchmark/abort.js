@@ -70,8 +70,11 @@ group('abort & error delivery', () => {
         .catch(doNotOptimize);
     });
 
-    // fail-eventually: every callback rejects, so every error lands in
-    // capturedErrors[] and an AggregateError is built on drain.
+    // fail-eventually: refills stop once the first error is captured, so
+    // only the initial bufferSize-worth of in-flight rejections ever land in
+    // capturedErrors[] — the drain builds a bufferSize-element
+    // AggregateError, not a `count`-element one (a larger aggregation is
+    // unreachable by design; this measures capture + small-aggregate cost).
     bench("errors: 'fail-eventually' aggregation", async () => {
       await drain(bufferedAsyncMap(asyncRange(count), rejectingCallback, { errors: 'fail-eventually' }))
         .catch(doNotOptimize);
