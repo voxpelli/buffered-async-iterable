@@ -70,6 +70,8 @@ describe('bufferedAsyncMap() memory', () => {
   });
 
   it("does not retain memory per pull on a long-lived ordered: 'eager' source", async function () {
+    this.timeout(30_000); // same 22k-pull budget as the unordered case above
+
     const { gc } = globalThis;
 
     if (typeof gc !== 'function') {

@@ -59,6 +59,18 @@ function unboundedNonHeadIterator (stepSpy, lookahead) {
   return bufferedAsyncMap([0, 1], callback, { bufferSize: 6, ordered: 'eager', ...(lookahead === undefined ? {} : { lookahead }) });
 }
 
+/**
+ * A *function* object carrying a callable Symbol.asyncIterator — spec-legal as
+ * an async iterable, since ECMA "Type(x) is Object" includes callables.
+ *
+ * @type {*}
+ */
+const callableAsyncIterable = () => 'never invoked as a function';
+callableAsyncIterable[Symbol.asyncIterator] = async function * () {
+  yield 'a';
+  yield 'b';
+};
+
 // ─────────────────────────────────────────────────────────────────────────
 // `ordered: 'eager'` — concurrent callback dispatch with in-order delivery
 // (contract in ADVANCED.md, "Ordered mode"). The first block covers option
@@ -320,6 +332,24 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
       const outcomes = collectNextOutcomes(iterator, 3);
       await clock.runAllAsync();
       expectSingleRejectionThenDone(await outcomes, reason);
+    });
+
+    it('fans out a callable callback result carrying Symbol.asyncIterator', async () => {
+      // The eager dispatch gate shares isAsyncIterable with the non-eager path,
+      // so a callable async-iterable fans out here too rather than being
+      // delivered as a plain value (for-await parity).
+      const flow = (async () => {
+        /** @type {*[]} */
+        const collected = [];
+        for await (const value of bufferedAsyncMap(['x'], () => callableAsyncIterable, { ordered: 'eager' })) {
+          collected.push(value);
+        }
+        return collected;
+      })();
+
+      await clock.runAllAsync();
+      const collected = await flow;
+      collected.should.deep.equal(['a', 'b']);
     });
 
     it('fail-fast surfaces the source-order-earliest error, not the chronologically-first', async () => {
