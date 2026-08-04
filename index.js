@@ -1129,16 +1129,15 @@ export function bufferedAsyncMap (input, callback, options) {
    */
   const pumpLane = (lane) => {
     const { iterator } = lane;
-    // The isDone/abortReason guards also cover the re-pump from this
-    // function's own .then. isDone: a step resolving after close must not
-    // pull an iterator that doCleanup has already .return()ed. abortReason:
-    // an abort not yet delivered (isDone flips only on the delivering pull)
-    // must already stop new steps — matching fillQueue, which never starts
-    // work after an abort is pending. No capturedErrors gate, deliberately:
-    // a captured fail-eventually error only surfaces when its envelope is
-    // raced, so ordered: true keeps stepping the live generator after a
-    // capture and eager must too (observable-parity contract).
-    if (isDone || abortReason || !iterator || lane.done || lane.terminalErr || lane.pending) return;
+    // The full fillQueue stop-set, because a lane step IS a pull: isDone (a
+    // step resolving after close must not pull an iterator doCleanup already
+    // .return()ed), abortReason (an abort not yet delivered — isDone flips
+    // only on the delivering pull — must already stop new steps), and
+    // capturedErrors (after a fail-eventually capture ordered: true never
+    // steps a generator again — fillQueue refuses — so eager must stop too;
+    // work already in flight still drains, but nothing new starts). The
+    // guards also cover the re-pump from this function's own .then.
+    if (isDone || abortReason || capturedErrors.length > 0 || !iterator || lane.done || lane.terminalErr || lane.pending) return;
     if (lane.buffer.length >= laneLookahead) return;
 
     lane.pending = safeStep(iterator, catchSubStepErr).then(result => {
@@ -1357,6 +1356,17 @@ export function bufferedAsyncMap (input, callback, options) {
 
         // Generator head with an empty buffer → make sure a step is in flight.
         pumpLane(head);
+
+        // During a fail-eventually drain pumpLane starts nothing new, so a
+        // head with nothing buffered and nothing in flight has surfaced all
+        // the work that was dispatched before the capture — forfeit its
+        // remaining (never-started) values, exactly as ordered: true cuts a
+        // generator off once fillQueue stops. Without this the park below
+        // would wait on a step that can no longer exist.
+        if (!head.pending && capturedErrors.length > 0) {
+          lanes.shift();
+          continue;
+        }
       }
 
       // Park on the head's in-flight event: the placeholder's dispatch (head

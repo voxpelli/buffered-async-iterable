@@ -121,12 +121,16 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
 
     /**
      * Drains a generator workload whose per-item work happens before the first
-     * yield, returning the collected values plus the wall-clock at completion.
+     * yield, returning the collected values plus the run's DURATION. Duration,
+     * not a completion timestamp: two sequential runs share one fake clock, so
+     * comparing absolute Date.now() values is vacuously true for whichever run
+     * happens second — a regression to full serialisation passed unnoticed.
      *
      * @param {'eager'|true} orderedOpt
      * @returns {Promise<[number[], number]>}
      */
     const runGeneratorWorkload = (orderedOpt) => (async () => {
+      const start = Date.now();
       /** @type {number[]} */
       const out = [];
       for await (const value of bufferedAsyncMap(yieldValuesOverTime(count, () => 1), async function * (item) {
@@ -136,7 +140,7 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
         out.push(value);
       }
       /** @type {[number[], number]} */
-      const result = [out, Date.now()];
+      const result = [out, Date.now() - start];
       return result;
     })();
 
@@ -279,6 +283,34 @@ describe("bufferedAsyncMap() ordered: 'eager'", () => {
       await clock.runAllAsync();
       const doneResult = await doneFlow;
       doneResult.should.deep.equal({ done: true, value: undefined });
+    });
+
+    it('stops stepping lanes after a captured error — only already-started work drains', async () => {
+      // fillQueue never pulls again after a fail-eventually capture, so
+      // ordered: true cuts a generator off mid-stream; eager must apply the
+      // same stop. Item 0 errors immediately (captured at the head); item 1's
+      // generator had exactly one step in flight at capture — that value
+      // drains, and nothing further is ever stepped. Pre-fix the lane was
+      // pumped to exhaustion, delivering values ordered: true never would.
+      const boom = new Error('boom');
+
+      const iterator = bufferedAsyncMap([0, 1], async function * (item) {
+        if (item === 0) throw boom;
+        await promisableTimeout(30);
+        yield 'g1';
+        await promisableTimeout(30);
+        yield 'g2';
+        await promisableTimeout(30);
+        yield 'g3';
+      }, { bufferSize: 6, ordered: 'eager', errors: 'fail-eventually' });
+
+      const flow = collectNextOutcomes(iterator, 4);
+      await clock.runAllAsync();
+      const outcomes = await flow;
+
+      deliveredValues(outcomes).should.deep.equal(['g1']); // in-flight step only
+      const rejection = outcomes.find(o => o.rejected);
+      unwrapCapturedError(rejection?.value).should.equal(boom);
     });
 
     it('starts no new lane steps once an external abort is pending', async () => {
