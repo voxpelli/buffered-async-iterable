@@ -252,7 +252,7 @@ External abort takes precedence over captured-but-not-yet-thrown errors; the exa
 
 ## Resource management
 
-A plain `for await … of` already closes the iterator (calls its `.return()`, which runs the source's cleanup) when the loop completes, `break`s or throws — no extra syntax needed for the common case.
+A plain `for await … of` already closes the iterator (calls its `.return()`, which runs the source's cleanup) when the loop `break`s, `return`s or throws — no extra syntax needed for the common case. On *normal* completion the language calls no `.return()` at all (that is plain `for await` semantics, not a quirk of this library); it isn't needed there, because a source that ran to exhaustion has already run its own cleanup, and this iterator runs its end-of-stream cleanup on that same path.
 
 The returned iterator additionally implements `Symbol.asyncDispose`, so it can be bound with [`await using`](https://github.com/tc39/proposal-explicit-resource-management). That covers the gap a loop can't: the iterator being created but the loop never entered (or the iterator being handed around before it's consumed):
 
