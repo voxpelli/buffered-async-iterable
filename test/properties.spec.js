@@ -620,13 +620,21 @@ describe('bufferedAsyncMap() properties', function () {
       async (values, ops) => {
         const thrownError = new Error('consumer-throw');
 
+        // Plain `yield` loops, NOT `yield * values`: a generator suspended in
+        // `yield *` delegates .throw() to the inner iterator, and array
+        // iterators have no throw method — Node 24 then rejects with the
+        // spec-mandated TypeError ("The iterator does not provide a 'throw'
+        // method") where Node 22's V8 propagated the thrown error instead.
+        // The oracle must not encode that version-dependent delegation
+        // branch; a plain yield injects the throw identically on every Node
+        // version.
         let nativeFinally = false;
         async function * nativeSrc () {
-          try { yield * values; } finally { nativeFinally = true; }
+          try { for (const value of values) yield value; } finally { nativeFinally = true; }
         }
         let libFinally = false;
         async function * libSrc () {
-          try { yield * values; } finally { libFinally = true; }
+          try { for (const value of values) yield value; } finally { libFinally = true; }
         }
 
         const expected = await runOps(nativeSrc(), ops, thrownError);
@@ -641,9 +649,10 @@ describe('bufferedAsyncMap() properties', function () {
           // terminal settles for the LIBRARY iterator, the source's finally
           // must ALREADY have run — markAsEnded awaits cleanup (including
           // source.return()) before any closer resolves. Library-side only:
-          // eager construction always starts the source (even `yield * []`
-          // completes, finally included, on the prefetch pull), so there is
-          // no never-started carve-out on this side.
+          // eager construction always starts the source (even with zero
+          // values the generator completes, finally included, on the
+          // prefetch pull), so there is no never-started carve-out on this
+          // side.
           (settled) => {
             const isTerminal = settled.rejected || settled.result.done === true;
             if (isTerminal && !libFinally) {
