@@ -356,6 +356,10 @@ describe('bufferedAsyncMap() options.signal', () => {
     await after.should.eventually.deep.equal({ done: true, value: undefined });
   });
 
+  // This deterministic 11-offset sweep is the regression PIN for the
+  // drain-race identity contract; test/properties.spec.js's abort property
+  // is the accumulating SEARCH over the surrounding geometry (same
+  // commit-point oracle). Neither replaces the other — keep both.
   it('delivers exactly one rejection when an abort races the drain-throw, with the winner owning the identity', async () => {
     // The window: fail-eventually captured an error and the buffer drained;
     // an external abort landing in the await-gap between error capture and
