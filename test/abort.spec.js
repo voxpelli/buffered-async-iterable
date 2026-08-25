@@ -407,8 +407,13 @@ describe('bufferedAsyncMap() options.signal', () => {
       rejections.should.have.length(1, `offset ${hops} saw ${rejections.length} rejections`);
 
       // Sampled after settlement: the signal's reason is the immutable
-      // record of which side committed the shutdown first.
-      const abortWon = capturedSignal?.aborted === true && capturedSignal.reason === reason;
+      // record of which side committed the shutdown first. A callback that
+      // never ran (capturedSignal undefined) is itself proof the abort
+      // committed before the source pull settled: the post-close dispatch
+      // drop starts no new callback work once shutdown has committed, and
+      // nothing else could have closed this iterator.
+      const abortWon = capturedSignal === undefined ||
+        (capturedSignal.aborted === true && capturedSignal.reason === reason);
       const expected = abortWon ? reason : cbError;
       chai.expect(rejections[0]?.value).to.equal(
         expected,

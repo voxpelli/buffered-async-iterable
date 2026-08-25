@@ -80,12 +80,82 @@ item blocks the *work*, not just the results (the serial timing is pinned by
 the nested-ordered spec in `test/values.spec.js`). Values are still delivered
 contiguously and in source order: everything item N's generator yields comes
 before anything from item N+1. If you need concurrent execution *and*
-source-order delivery, return a value (such as an array) from the callback
-rather than yielding from a generator.
+source-order delivery, use `ordered: 'eager'` (below), or return a value (such
+as an array) from the callback rather than yielding from a generator.
 
 Abort delivery and both error modes behave identically in ordered and
 unordered mode (pinned by `test/abort.spec.js` and
 `test/errors-fail-fast.spec.js`).
+
+### `ordered: 'eager'` — concurrent dispatch, in-order delivery
+
+`ordered: 'eager'` delivers in strict source order like `ordered: true`, but
+dispatches callbacks — **including async-generator callbacks** — concurrently
+up to `bufferSize`. It is the mode to reach for when you need deterministic
+output *and* fan-out concurrency (e.g. a generator callback whose expensive
+work happens before its first `yield`). `test/eager.spec.js` pins that a
+generator workload reaches `bufferSize` concurrent callback bodies here while
+`ordered: true` stays serial, and that both deliver the identical ordered
+sequence.
+
+Concurrency is bounded twice: at most `bufferSize` source items are in flight,
+and each not-yet-at-head item may buffer at most `lookahead` values ahead of
+delivery (the `lookahead` option, default 1). A non-head generator — even an
+unbounded one — is therefore stepped up to `lookahead` times and then paused
+until it reaches the delivery head, so total buffering stays bounded at
+`bufferSize × lookahead` regardless of generator length. Values are streamed one
+at a time as the head lane produces them; the mode never buffers a whole
+generator's output.
+
+**`lookahead` trades memory *and* critical-path priority, not the head's own
+concurrency.** Buffers and step-slots are per-lane and independent, so the head
+is never starved — raising `lookahead` only lets *non-head* lanes run further
+ahead speculatively. The default of 1 captures the win for the common shape,
+where the expensive work is before the first yield. A larger value helps a deep
+per-item pipeline (e.g. paginated fetches whose cost is spread across yields),
+but it costs memory, wastes more speculative work if the consumer stops early,
+and — because a non-head lane then holds shared external resources (a threadpool,
+a connection pool) for longer — can delay the head's sustained throughput under
+contention. `lookahead` is only accepted with `ordered: 'eager'` (it throws
+otherwise); for controlling contention, reach for `bufferSize` instead.
+
+**At `lookahead: 1` only the work up to each first yield parallelises.** Every
+lane is stepped once as it is admitted, so per-item work *before* the first yield
+runs concurrently across `bufferSize` lanes — the shape the default is chosen
+for. Work *after* the first yield behaves differently: a non-head lane runs one
+value ahead and then parks until it reaches the head, so that part is paid
+serially at the head and raising `bufferSize` does not speed it up.
+
+A generator whose cost is spread across its yields therefore lands in between —
+faster than `ordered: true`, because its first page still fans out, but flat in
+`bufferSize`. Measured on 8 items × 2 pages × 40 ms: `ordered: true` 652 ms;
+eager at `lookahead: 1` 365 ms at `bufferSize` 2, 6 and 12 alike. In the limiting
+case where the first yield is free and *all* cost falls between yields, eager at
+`lookahead: 1` matches `ordered: true` exactly (324 ms either way). Raise
+`lookahead` to spend memory on that inter-yield concurrency, treating
+`bufferSize × lookahead` as a budget in values. The budget is a real ceiling: for
+a very-long or unbounded spread-cost generator no `lookahead` both bounds memory
+*and* recovers full concurrency, so where out-of-order delivery is acceptable
+reach for `ordered: false` there instead.
+
+Ordering, abort delivery, and both error modes follow the same rules as
+`ordered: true`. In particular a `fail-fast` error surfaces in source order —
+the *source-order-earliest* error wins, not the chronologically-first — a
+generator's already-buffered values are delivered before its own later error,
+and after a `fail-eventually` capture no lane is stepped again (the same stop
+`ordered: true` applies to its feed). One drain-size caveat follows from the
+dispatch being eager: work already *started* before the capture still drains,
+so a `fail-eventually` drain can surface values `ordered: true` — having never
+started them — would not. The stop policy is identical; the in-flight set it
+applies to is larger.
+Lane ordering relies on the source answering `.next()` in FIFO order; a
+hand-rolled iterator that does not should use `bufferSize: 1` or be wrapped in
+an async generator (the same caveat as the prefetch model above).
+
+The trade-off versus unordered `fail-fast`: because delivery is head-first,
+eager cannot short-circuit the pipeline before the earliest error reaches the
+head, so later in-flight lanes keep running until then. That is the cost of
+identical observable order, and it matches `ordered: true`.
 
 ## Cancellation in depth
 
@@ -112,6 +182,18 @@ does not cancel it: the pending source promises are abandoned (promises are
 not cancellable), but the consumer unblocks. The internal timer is cleared as
 soon as cleanup wins, so a prompt close doesn't keep the event loop alive for
 the rest of the window.
+
+**No new callback work starts after close.** A source pull already in flight
+when the iterator closes may still settle with an item afterwards; that item
+is dropped without invoking the callback — in every mode. Closing cancels
+not only the delivery of results but also the dispatch of work that has not
+yet started; only callbacks already running continue (see the per-callback
+signal notes below). This covers `fail-fast` too: after its terminal
+rejection, no fresh callback is dispatched for a late-settling pull. A
+`fail-eventually` *capture* is not a close — items already in flight when an
+error is captured still dispatch and their values drain, as described under
+"Errors in depth". (Pinned by `test/return.spec.js` and the post-close specs
+in `test/eager.spec.js`.)
 
 **Abort/error precedence.** External abort takes precedence over queued /
 not-yet-captured errors: if the signal aborts while fail-eventually errors

@@ -43,6 +43,24 @@ group('bufferSize scaling', () => {
   });
 });
 
+// 2b. Eager lane retirement. ordered: 'eager' retires one lane per source
+//     item via lanes.shift() — an O(bufferSize) memmove — so per-item
+//     bookkeeping scales with the buffer. This curve watches the documented
+//     O(count × bufferSize) debt until the head-cursor redesign lands
+//     (CLAUDE.md, "Deferred"); a super-linear kink here is the regression
+//     signal.
+group('eager lane retirement: bufferSize scaling', () => {
+  const count = 10000;
+
+  summary(() => {
+    for (const bufferSize of [1, 4, 16, 64]) {
+      bench(`eager bufferSize: ${bufferSize}`, async () => {
+        doNotOptimize(await drain(bufferedAsyncMap(asyncRange(count), identity, { bufferSize, ordered: 'eager' })));
+      }).gc('inner');
+    }
+  });
+});
+
 // 3. The two dispatch loops. ordered:false picks the least-targeted iterator
 //    via findLeastTargeted; ordered:true feeds from subIterators[0] and splices
 //    new buffer slots into place. Guards both loops and the ordered-insertion

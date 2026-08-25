@@ -11,22 +11,13 @@ import {
   expectSingleRejectionThenDone,
   fromArray,
   promisableTimeout,
+  sourceThatThrows,
   yieldValuesOverTime,
 } from './utils.js';
 
 chai.use(chaiAsPromised);
 chai.use(sinonChai);
 const should = chai.should();
-
-/**
- * @param {Error} expected
- * @returns {AsyncIterable<number>}
- */
-async function * sourceThatThrows (expected) {
-  yield 0;
-  yield 1;
-  throw expected;
-}
 
 describe('bufferedAsyncMap() errors: fail-fast', () => {
   /** @type {import('sinon').SinonFakeTimers} */

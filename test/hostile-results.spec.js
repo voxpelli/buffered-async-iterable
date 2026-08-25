@@ -9,6 +9,7 @@ import {
   bufferedAsyncMap,
 } from '../index.js';
 import {
+  callableAsyncIterable,
   collectNextOutcomes,
   expectSingleRejectionThenDone,
   promisableTimeout,
@@ -54,18 +55,6 @@ const truthyNonObjectIteratorCallback = () => ({ [Symbol.asyncIterator]: () => 4
  * @returns {*}
  */
 const nonCallableMemberShape = () => ({ [Symbol.asyncIterator]: undefined, tag: 'data' });
-
-/**
- * A *function* object carrying a callable Symbol.asyncIterator — spec-legal as
- * an async iterable, since ECMA "Type(x) is Object" includes callables.
- *
- * @type {*}
- */
-const callableAsyncIterable = () => 'never invoked as a function';
-callableAsyncIterable[Symbol.asyncIterator] = async function * () {
-  yield 'a';
-  yield 'b';
-};
 
 /**
  * An IteratorResult proxy that answers every unknown key — the private ERR

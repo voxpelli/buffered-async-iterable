@@ -7,20 +7,11 @@ import {
 } from '../index.js';
 import {
   fromArray,
+  sourceThatThrows,
 } from './utils.js';
 
 chai.use(chaiAsPromised);
 chai.should();
-
-/**
- * @param {Error} expected
- * @returns {AsyncIterable<number>}
- */
-async function * sourceThatThrows (expected) {
-  yield 0;
-  yield 1;
-  throw expected;
-}
 
 describe('bufferedAsyncMap() errors', () => {
   /** @type {import('sinon').SinonFakeTimers} */
