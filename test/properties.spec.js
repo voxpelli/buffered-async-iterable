@@ -78,8 +78,14 @@ import {
 /* eslint-disable n/no-process-env -- deliberate local knobs: deep sweeps and counterexample replay */
 const numRunsRaw = process.env['FC_NUM_RUNS'];
 const seedRaw = process.env['FC_SEED'];
-const fcPath = process.env['FC_PATH'];
+const fcPathRaw = process.env['FC_PATH'];
 /* eslint-enable n/no-process-env */
+
+// '' counts as unset (e.g. a shell script exporting an empty FC_PATH),
+// matching FC_SEED / FC_NUM_RUNS below — a present-but-empty value would
+// otherwise be handed to fast-check as a replay path AND trip the
+// single-test replay guard in fcAssert.
+const fcPath = (fcPathRaw === undefined || fcPathRaw === '') ? undefined : fcPathRaw;
 
 const numRuns = (numRunsRaw === undefined || numRunsRaw === '') ? 100 : Number(numRunsRaw);
 if (!Number.isSafeInteger(numRuns) || numRuns <= 0) {
