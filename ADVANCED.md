@@ -183,6 +183,18 @@ not cancellable), but the consumer unblocks. The internal timer is cleared as
 soon as cleanup wins, so a prompt close doesn't keep the event loop alive for
 the rest of the window.
 
+**No new callback work starts after close.** A source pull already in flight
+when the iterator closes may still settle with an item afterwards; that item
+is dropped without invoking the callback — in every mode. Closing cancels
+not only the delivery of results but also the dispatch of work that has not
+yet started; only callbacks already running continue (see the per-callback
+signal notes below). This covers `fail-fast` too: after its terminal
+rejection, no fresh callback is dispatched for a late-settling pull. A
+`fail-eventually` *capture* is not a close — items already in flight when an
+error is captured still dispatch and their values drain, as described under
+"Errors in depth". (Pinned by `test/return.spec.js` and the post-close specs
+in `test/eager.spec.js`.)
+
 **Abort/error precedence.** External abort takes precedence over queued /
 not-yet-captured errors: if the signal aborts while fail-eventually errors
 sit captured, the consumer sees `signal.reason`, not the captured errors. The
